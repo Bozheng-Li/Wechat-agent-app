@@ -1,0 +1,110 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import { CredentialStore } from '../backend/platform/credentials.mjs';
+import { ModelProviders } from '../backend/platform/providers.mjs';
+import { ModelClient, readModelResponse } from '../modules/agent/model-client.mjs';
+import { AppAgentRunner } from '../lib/testing.js';
+import { stickerPng } from './fixtures/stickers.mjs';
+
+function fixture(t, responses, models = [{ id: 'test-model' }]) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wechat-app-model-'));
+  t.after(() => { assert.equal(path.dirname(fs.realpathSync(root)), fs.realpathSync(os.tmpdir())); assert(path.basename(root).startsWith('wechat-app-model-')); fs.rmSync(root, { recursive: true, force: true }); });
+  const encryption = { isAvailable: () => true, encrypt: value => Buffer.from(value.split('').reverse().join('')), decrypt: value => value.toString().split('').reverse().join('') };
+  const credentials = new CredentialStore(root, encryption), providers = new ModelProviders(root, credentials), requests = [];
+  const fetchImpl = async (_url, request) => { requests.push(JSON.parse(request.body)); const value = responses.shift(); if (value instanceof Error) throw value; return Response.json(value); };
+  const ctx = { llm: providers, credentials, agentDefaultModel: { currentSelection: () => providers.defaultSelection() } };
+  const runner = new AppAgentRunner(ctx, () => null, () => ({ modelConfig: { promptStrategy: 'progressive-v1' } }));
+  runner.client = new ModelClient(providers, { fetchImpl });
+  return { root, credentials, providers, runner, requests, prepare: () => providers.save({ id: 'test', name: '测试', baseURL: 'http://127.0.0.1:12345/v1', models, stream: false }, 'test-private-key') };
+}
+const reply = (content = '你好', calls, finish = calls ? 'tool_calls' : 'stop') => ({ choices: [{ finish_reason: finish, message: { role: 'assistant', content, ...(calls ? { tool_calls: calls } : {}) } }], usage: { prompt_tokens: 10, completion_tokens: 5 } });
+const toolCall = (name, args = {}, id = 'call-1') => ({ id, type: 'function', function: { name, arguments: JSON.stringify(args) } });
+const request = options => ({ text: '测试', signal: new AbortController().signal, ...options });
+
+test('provider credentials persist encrypted and endpoint changes never reuse a key', async t => {
+  const f = fixture(t, []); await f.prepare();
+  assert.equal(JSON.stringify(await f.providers.list()).includes('test-private-key'), false);
+  assert.equal(fs.readFileSync(f.providers.file, 'utf8').includes('test-private-key'), false);
+  for (const name of fs.readdirSync(path.join(f.root, 'credentials'))) assert.equal(fs.readFileSync(path.join(f.root, 'credentials', name)).includes('test-private-key'), false);
+  const restarted = new ModelProviders(f.root, f.credentials); assert.equal((await restarted.selectionRequest({ provider: 'test', model: 'test-model' })).apiKey, 'test-private-key');
+  await restarted.save({ ...restarted.get('test'), baseURL: 'http://localhost:12346/v1' });
+  await assert.rejects(restarted.selectionRequest({ provider: 'test', model: 'test-model' }), error => error.code === 'MODEL_KEY_MISSING');
+});
+test('OS encryption failure never falls back to plaintext', async t => {
+  const f = fixture(t, []); f.credentials.encryption.isAvailable = () => false;
+  await assert.rejects(f.prepare(), error => error.code === 'CREDENTIAL_UNAVAILABLE');
+  assert.equal(fs.existsSync(path.join(f.root, 'credentials')), false);
+});
+test('chat tool results are returned to the same model before final reply', async t => {
+  const f = fixture(t, [reply(null, [toolCall('lookup', { q: '约定' })]), reply('约定是明天见。')]); await f.prepare();
+  let called = 0;
+  const result = await f.runner.run(request({ tools: [{ name: 'lookup', description: '查约定', parameters: { type: 'object' }, execute(args) { called++; assert.equal(args.q, '约定'); return '{"time":"明天"}'; } }] }));
+  assert.equal(called, 1); assert.equal(result.text, '约定是明天见。'); assert.equal(result.requestMetrics.length, 2);
+  assert.equal(f.requests[1].messages.at(-1).role, 'tool'); assert.equal(f.requests[1].messages.at(-1).tool_call_id, 'call-1');
+});
+test('progressive tools can be loaded and called without granting other capabilities', async t => {
+  const f = fixture(t, [reply(null, [toolCall('wechat_capabilities', { modules: ['memory'] })]), reply(null, [toolCall('wechat_memory', {}, 'call-2')]), reply('记住了')]); await f.prepare();
+  await f.runner.run(request({ tools: [{ name: 'wechat_memory', description: '记忆', parameters: { type: 'object' }, execute: async () => '{"ok":true}' }] }));
+  assert.equal(f.requests[0].tools.some(tool => tool.function.name === 'wechat_memory'), false);
+  assert.equal(f.requests[1].tools.some(tool => tool.function.name === 'wechat_memory'), true);
+});
+test('invalid or duplicate tool batch performs no operations', async t => {
+  const f = fixture(t, [reply(null, [toolCall('lookup'), toolCall('shell', {}, 'call-2')])]); await f.prepare(); let called = 0;
+  await assert.rejects(f.runner.run(request({ tools: [{ name: 'lookup', parameters: {}, execute() { called++; } }] })), error => error.code === 'MODEL_TOOLS_INVALID');
+  assert.equal(called, 0);
+});
+test('authorization is checked again after generation and before tools', async t => {
+  const f = fixture(t, [reply(null, [toolCall('lookup')])]); await f.prepare(); let allowed = true, called = 0;
+  const complete = f.runner.client.complete.bind(f.runner.client);
+  f.runner.client.complete = async options => { const value = await complete(options); allowed = false; return value; };
+  await assert.rejects(f.runner.run(request({ assertAllowed() { if (!allowed) throw new Error('revoked'); }, tools: [{ name: 'lookup', parameters: {}, execute() { called++; } }] })), /revoked/);
+  assert.equal(called, 0);
+});
+test('empty final after a tool does not replay tool side effects', async t => {
+  const f = fixture(t, [reply(null, [toolCall('lookup')]), reply('')]); await f.prepare(); let called = 0;
+  await assert.rejects(f.runner.run(request({ tools: [{ name: 'lookup', parameters: {}, execute() { called++; return 'ok'; } }] })), error => error.code === 'MODEL_EMPTY');
+  assert.equal(called, 1); assert.equal(f.requests.length, 2);
+});
+test('a tool-free empty completion retries once and truncated output is never accepted', async t => {
+  const f = fixture(t, [reply(''), reply('好了'), reply('未完成', null, 'length')]); await f.prepare();
+  assert.equal((await f.runner.run(request())).emptyResponseRetries, 1);
+  await assert.rejects(f.runner.run(request()), error => error.code === 'MODEL_INCOMPLETE');
+});
+test('explicit visual model receives image bytes and tool-only internal tasks stay isolated', async t => {
+  const f = fixture(t, [reply('图片说明'), reply('{}')], [{ id: 'test-model' }, { id: 'vision', vision: true }]); await f.prepare();
+  await f.runner.run(request({ mode: 'vision', systemOverride: '识图', images: [{ mediaType: 'image/png', data: stickerPng().toString('base64') }] }));
+  assert.equal(f.requests[0].model, 'vision'); assert.equal(f.requests[0].messages[1].content[1].type, 'image_url');
+  await f.runner.run(request({ mode: 'role-memory', tools: [{ name: 'shell', parameters: {}, execute() { throw Error(); } }] }));
+  assert.equal(f.requests[1].tools, undefined);
+});
+test('SSE reconstructs split text, tool calls and usage', async () => {
+  const frames = [
+    { choices: [{ delta: { content: '你好' } }] },
+    { choices: [{ delta: { tool_calls: [{ index: 0, id: 'call', function: { name: 'lookup', arguments: '{"q":' } }] } }] },
+    { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '"问题"}' } }] }, finish_reason: 'tool_calls' }] },
+    { choices: [], usage: { total_tokens: 15 } },
+  ].map(value => 'data: ' + JSON.stringify(value) + '\n\n').join('') + 'data: [DONE]\n\n';
+  const bytes = new TextEncoder().encode(frames);
+  const stream = new ReadableStream({ start(controller) { for (let i = 0; i < bytes.length; i += 7) controller.enqueue(bytes.slice(i, i + 7)); controller.close(); } });
+  const value = await readModelResponse(new Response(stream, { headers: { 'content-type': 'text/event-stream' } }));
+  assert.equal(value.message.content, '你好'); assert.equal(value.message.tool_calls[0].function.arguments, '{"q":"问题"}'); assert.equal(value.usage.total_tokens, 15);
+});
+test('truncated SSE and HTTP errors do not expose or return partial responses', async () => {
+  await assert.rejects(readModelResponse(new Response('data: {"choices":[{"delta":{"content":"partial"}}]}\n\n', { headers: { 'content-type': 'text/event-stream' } })), error => error.code === 'MODEL_STREAM_INCOMPLETE');
+  await assert.rejects(readModelResponse(new Response('secret diagnostic', { status: 401 })), error => error.code === 'MODEL_HTTP' && !error.message.includes('secret'));
+});
+
+test('editing an endpoint during a tool loop affects only the next run', async t => {
+  const f = fixture(t, [reply(null, [toolCall('lookup')]), reply('完成')]); await f.prepare();
+  const destinations = [], original = f.runner.client.fetch;
+  f.runner.client.fetch = async (url, options) => { destinations.push(url); return original(url, options); };
+  await f.runner.run(request({ tools: [{ name: 'lookup', parameters: { type: 'object' }, execute: async () => {
+    await f.providers.save({ ...f.providers.get('test'), baseURL: 'http://127.0.0.1:54321/v1' }); return 'ok';
+  } }] }));
+  assert.deepEqual(destinations, ['http://127.0.0.1:12345/v1/chat/completions', 'http://127.0.0.1:12345/v1/chat/completions']);
+  await assert.rejects(f.runner.run(request()), error => error.code === 'MODEL_KEY_MISSING');
+  assert.equal(destinations.length, 2);
+});

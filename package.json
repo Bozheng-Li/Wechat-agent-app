@@ -1,0 +1,43 @@
+{
+  "name": "dsh-wechat-app",
+  "productName": "Wechat Agent App",
+  "version": "0.1.0-preview.1",
+  "description": "独立运行的微信助手：自然聊天、持久记忆、朋友圈与自动化",
+  "author": "Wechat Agent contributors",
+  "private": true,
+  "type": "module",
+  "main": "desktop/main.cjs",
+  "license": "AGPL-3.0-or-later",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "start": "npm run build && electron .",
+    "test": "npm run build && node scripts/test.mjs",
+    "test:desktop": "npm run build && node scripts/test-desktop.mjs",
+    "engine:prepare": "node scripts/prepare-wechat-engine.mjs",
+    "runtime:prepare": "node scripts/prepare-runtime.mjs",
+    "pack:dir": "npm run build && node scripts/package.mjs --dir",
+    "pack": "npm run build && node scripts/package.mjs",
+    "audit:package": "node scripts/audit-package.mjs",
+    "test:live": "npm run build && node scripts/test-live.mjs"
+  },
+  "devDependencies": {
+    "electron": "41.10.7",
+    "electron-builder": "26.18.0",
+    "fast-xml-parser": "5.11.2",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "rolldown": "1.2.15",
+    "tar": "7.5.22",
+    "yaml": "2.9.1",
+    "zod": "4.6.7"
+  }
+}
