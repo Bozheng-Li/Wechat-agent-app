@@ -77,6 +77,26 @@ ERR_MOMENTS_WRITE_PROTOCOL：微信已返回这条动态，但回执未包含全
 
 后续：账号换分组后 `gpt-image-2.6-flare` 可用，应用里把 0809 的模型列表收敛为这一个模型、设为默认，真机跑通「生成 → 取图 → 删除素材」：41 秒返回 1.06 MB PNG（1536×1024）。应用对失败的处理本来就是对的——返回 `IMAGE_GENERATION_HTTP：0809 / <模型>：生图 API 返回 HTTP 503`，不假装成功、不卡住对话。
 
+## 后续两轮（同一天）
+
+回归之后又针对发现的问题改了两处，都做了实机验证：
+
+| 改动 | 验证方式 | 结果 |
+| --- | --- | --- |
+| 朋友圈可见范围可配（`publishScope`，默认「自定义屏蔽名单」） | 真实账号发布纯文字动态、不选屏蔽对象 | 1.5 秒拿到回执，`blocked=0`，正文可见，删除后复查消失；不再出现「回执未包含全部指定屏蔽对象」 |
+| 生图换模型 | 应用内 `moments.materials.generate` → 取图 → 删除素材 | `gpt-image-2.6-flare` 41 秒返回 1.06 MB PNG（1536×1024），Pillow 可正常解码 |
+| 增量更新（`.blockmap` 逐块比对） | 对比两个安装包的 blockmap，并对 release 资源发 Range 请求 | 复用 11868/11909 块，需下载 0.88 MB（整包 238.8 MB）；GitHub 返回 206 与精确字节数 |
+
+### 复跑注意（踩过的坑）
+
+后台 shell 可能还留着上一次导出的变量。第二轮我只想跑只读项，却没有在子进程里彻底清掉 `LIVE_ALLOW_WRITES` / `LIVE_MOMENTS` / `LIVE_MOMENTS_IRREVERSIBLE`，脚本又把点赞和评论跑了一遍——这两样**撤不回来**，只能在手机上手动删。现在复跑前请显式置空再启动：
+
+```powershell
+$env:LIVE_ALLOW_WRITES=''; $env:LIVE_MOMENTS=''; $env:LIVE_MOMENTS_IRREVERSIBLE=''
+node_modules\electron\dist\electron.exe tests\live-regression.cjs
+```
+
+写入门槛是按环境变量判定的（`process.env.X === '1'`），置空即可关闭，不需要删变量。
 ## 没覆盖到的部分
 
 - **聊天收发、群聊简报、联网搜索**：需要真人发消息触发，本轮没有向任何联系人发消息；聊天链路由 961 项隔离测试与用户本人手工验证覆盖。

@@ -8,7 +8,7 @@ const business = [
   'automatic-memory-compaction', 'authorization-backups', 'chat-image-generation', 'contact-classification', 'conversation-preferences', 'data-root',
   'execution-traces', 'execution-traces-graph', 'image-memory', 'image-reply-grounding',
   'inbound-files', 'inbound-images', 'media-library', 'media-channel-integration', 'memory-retention',
-  'memory-scan-performance', 'moments-arrangement', 'moments-automation', 'moments-friend-replies',
+  'memory-scan-performance', 'moments-arrangement', 'moments-automation', 'moments-default-audience', 'moments-friend-replies',
   'moments-image-stream', 'moments-interaction-automation', 'moments-interactions', 'moments-likes',
   'moments-materials', 'moments-person-memory', 'moments-publication-recovery', 'moments-publish-scope', 'moments-publishing',
   'moments-read-authorization', 'moments-recency', 'moments-subject', 'moments-tools', 'natural-chat',

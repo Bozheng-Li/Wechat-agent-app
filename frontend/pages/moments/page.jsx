@@ -27,6 +27,8 @@ function MomentsWorkspace({ rpc, status, onNavigate }) {
     [selection, setSelection] = useState({ blockedLabelIds: [], blockedUserIds: [] });
   const [publishScope, setPublishScope] = useState('blocked-list'), [scopeSaving, setScopeSaving] = useState(false),
     [scopeSaved, setScopeSaved] = useState(false), [scopeError, setScopeError] = useState('');
+  const [defaultBlocks, setDefaultBlocks] = useState({ blockedLabelIds: [], blockedUserIds: [] }),
+    [defaultSaving, setDefaultSaving] = useState(false), [defaultNotice, setDefaultNotice] = useState(''), [defaultError, setDefaultError] = useState('');
   const api = useRef(rpc); api.current = rpc;
   useEffect(() => {
     const accountId = status.account?.id;
@@ -60,6 +62,40 @@ function MomentsWorkspace({ rpc, status, onNavigate }) {
     const value = await state.execute('moments.audience', {}, false);
     if (value) { setAudience(value); setAudienceError(false); } else setAudienceError(true);
   };
+  const hasDefault = defaultBlocks.blockedLabelIds.length + defaultBlocks.blockedUserIds.length > 0;
+  // 账号级默认屏蔽名单只预填这一次的勾选，发布时仍以页面选择为准。
+  useEffect(() => {
+    const accountId = status.account?.id;
+    if (!accountId) return;
+    let live = true;
+    api.current('moments.audienceDefault', { accountId }, AbortSignal.timeout(15000)).then(value => {
+      if (!live || !value) return;
+      const defaults = { blockedLabelIds: [...(value.blockedLabelIds ?? [])], blockedUserIds: [...(value.blockedUserIds ?? [])] };
+      setDefaultBlocks(defaults);
+      setSelection(current => current.blockedLabelIds.length || current.blockedUserIds.length ? current : defaults);
+      if (defaults.blockedLabelIds.length || defaults.blockedUserIds.length) void loadAudience();
+    }).catch(() => { if (live) setDefaultError('默认屏蔽名单读取失败，请刷新后重试；本次仍按页面上勾选的范围发布。'); });
+    return () => { live = false; };
+  }, [status.account?.id]);
+  useEffect(() => {
+    if (!defaultNotice) return;
+    const timer = setTimeout(() => setDefaultNotice(''), 2500);
+    return () => clearTimeout(timer);
+  }, [defaultNotice]);
+  const writeDefault = async (selectionIds, done) => {
+    if (defaultSaving) return;
+    setDefaultSaving(true); setDefaultNotice(''); setDefaultError('');
+    try {
+      const value = await api.current('moments.audienceDefault', { accountId: status.account.id, ...selectionIds }, AbortSignal.timeout(15000));
+      if (!value) throw Error('默认名单未确认保存');
+      setDefaultBlocks({ blockedLabelIds: [...(value.blockedLabelIds ?? [])], blockedUserIds: [...(value.blockedUserIds ?? [])] });
+      setDefaultNotice(done);
+    } catch (error) {
+      setDefaultError((error.message || '默认名单保存失败') + '，本次勾选仍会用于这一次发布。');
+    } finally { setDefaultSaving(false); }
+  };
+  const saveDefault = () => writeDefault({ blockedUserIds: selection.blockedUserIds, blockedLabelIds: selection.blockedLabelIds }, '已保存为默认名单');
+  const clearDefault = () => writeDefault({ blockedUserIds: [], blockedLabelIds: [] }, '已清除默认名单');
   const operation = useRef(null), liveState = useRef(state); liveState.current = state;
   const data = state.data, posts = data?.posts ?? [], post = posts.find(post => post.id === postId);
   useEffect(() => { const timer = setInterval(() => { if (!liveState.current.busy) void liveState.current.refresh(); }, 15000); return () => clearInterval(timer); }, []);
@@ -96,7 +132,8 @@ function MomentsWorkspace({ rpc, status, onNavigate }) {
         onInteract={post => { setInteractionPost({ postId: post.id, key: crypto.randomUUID() }); setTab('interactions'); }} />}
       {tab === 'interactions' && <MomentsInteractionsPage key={status.account?.id} rpc={rpc} status={status} onNavigate={onNavigate} initialPost={interactionPost} onSeedUsed={() => setInteractionPost(null)} onComments={loadComments} />}
       {tab === 'materials' && <MomentsMaterialsPage rpc={rpc} status={status} embedded onNavigate={onNavigate} />}
-      {tab === 'publishing' && <MomentsPublishingPage rpc={rpc} state={state} status={status} audience={audience} audienceError={audienceError} loadAudience={loadAudience} onNavigate={onNavigate} />}
+      {tab === 'publishing' && <MomentsPublishingPage rpc={rpc} state={state} status={status} audience={audience} audienceError={audienceError} loadAudience={loadAudience} onNavigate={onNavigate}
+        defaultAudience={defaultBlocks} onEditAudience={() => setTab('publish')} />}
       {tab === 'posts' && <>
         <div className="wa-moments-toolbar">
           <Button disabled={state.busy || !status.online} onClick={() => state.execute('moments.discover')}>拉取我的动态</Button>
@@ -166,6 +203,16 @@ function MomentsWorkspace({ rpc, status, onNavigate }) {
         </section>
         <AudiencePicker heading="屏蔽名单" data={audience} error={audienceError} labelIds={selection.blockedLabelIds} userIds={selection.blockedUserIds}
           onChange={values => setSelection({ ...selection, ...values })} onRead={loadAudience} busy={state.busy} online={status.online} />
+        <div className="wa-moments-default-audience" data-testid="moments-default-audience">
+          <p className="wa-wb-note">勾选即生效，只对这一次发布有效。</p>
+          <div className="wa-wb-actions">
+            <Button quiet disabled={state.busy || !status.online || defaultSaving} onClick={saveDefault}>保存为默认名单</Button>
+            <Button quiet disabled={state.busy || !status.online || defaultSaving || !hasDefault} onClick={clearDefault}>清除默认名单</Button>
+            <span className="wa-help" aria-live="polite">{defaultSaving ? '正在保存默认名单…' : defaultNotice ||
+              `当前默认名单：${defaultBlocks.blockedLabelIds.length} 个标签、${defaultBlocks.blockedUserIds.length} 位联系人。`}</span>
+          </div>
+          {defaultError && <p role="alert" className="wa-alert is-error">{defaultError}</p>}
+        </div>
         <div className="wa-form-actions"><span className="wa-help">微信确认后显示发布结果。</span><Button disabled={state.busy || !status.online || (!text.trim() && !photos.length) || !!fileError || preview.missing || hasSelection && audienceError} onClick={async () => {
           const result = await write({ action: 'publish', text, ...(hasSelection ? selection : {}), ...(photos.length ? { images: photos.map(photo => photo.data) } : {}) });
           if (result) { setText(''); setPhotos([]); setSelection({ blockedLabelIds: [], blockedUserIds: [] }); setPostId(result.postId); setTab('posts'); }

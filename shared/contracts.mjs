@@ -1,5 +1,6 @@
 import { personaText } from '../prompts/personas/text.mjs';
 import { personaFromPreset } from '../prompts/personas/catalog.mjs';
+import { validateDefaultAudience } from './moments-audience.mjs';
 import manifest from "../package.json" with { type: 'json' };
 
 export const CHANNEL = '/wechat-agent';
@@ -60,7 +61,8 @@ export const publishScopeOf = settings =>
   PUBLISH_SCOPES.includes(settings?.publishScope) ? settings.publishScope : DEFAULT_PUBLISH_SCOPE;
 
 export function emptySettings() {
-  return { enabled: false, privatePeers: [], groups: [], prompt: '', publishScope: DEFAULT_PUBLISH_SCOPE };
+  return { enabled: false, privatePeers: [], groups: [], prompt: '', publishScope: DEFAULT_PUBLISH_SCOPE,
+    defaultBlockedUserIds: [], defaultBlockedLabelIds: [] };
 }
 
 export function emptyPersona(identity) {
@@ -403,6 +405,8 @@ export function validateSettings(input) {
     prompt: input.prompt.trim(),
     // 旧账号没有这个字段，缺省按“自定义屏蔽名单”保存，避免恢复自动屏蔽全部好友。
     publishScope: input.publishScope === undefined ? DEFAULT_PUBLISH_SCOPE : validatePublishScope(input.publishScope),
+    // 账号级默认屏蔽名单只预填手动发布页；自动发布须显式勾选后才会使用。
+    ...validateDefaultAudience(input),
   };
   // Older configurations only had the single master switch, so a missing flag
   // keeps following it until the user sets one explicitly.

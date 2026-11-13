@@ -2,7 +2,7 @@ import { ChannelError, validateSettings, validateConversationSettings, validateP
 import { absoluteDirectory, sameDirectory } from "../../backend/storage/paths.mjs";
 import { preserveTimeValues } from '../../shared/time-settings.mjs';
 
-export const endpoints = ['storage.save', 'natural.resume', 'conversation.configure', 'moments.publishScope', 'settings'];
+export const endpoints = ['storage.save', 'natural.resume', 'conversation.configure', 'moments.publishScope', 'moments.audienceDefault', 'settings'];
 
 export async function settingsMutation(
   { store, channel, relocateWorkspace, currentAccount, conversation, paused, assertLive, status, state },
@@ -98,6 +98,24 @@ export async function settingsMutation(
       }
       assertLive(signal);
       return { scope: publishScopeOf(store.settings(account.id)) };
+    }
+    case 'moments.audienceDefault': {
+      const account = currentAccount(payload), before = store.settings(account.id);
+      if (payload.blockedUserIds !== undefined || payload.blockedLabelIds !== undefined) {
+        // 默认屏蔽名单属于账号回复设置；只改这两个字段，其余设置原样保留。
+        const next = validateSettings({
+          ...before,
+          defaultBlockedUserIds: payload.blockedUserIds === undefined ? before.defaultBlockedUserIds : payload.blockedUserIds,
+          defaultBlockedLabelIds: payload.blockedLabelIds === undefined ? before.defaultBlockedLabelIds : payload.blockedLabelIds,
+        });
+        if (JSON.stringify(next) !== JSON.stringify(before)) {
+          signal?.throwIfAborted(); currentAccount(payload);
+          store.configure(account.id, next);
+        }
+      }
+      const settings = store.settings(account.id);
+      assertLive(signal);
+      return { blockedUserIds: settings.defaultBlockedUserIds, blockedLabelIds: settings.defaultBlockedLabelIds };
     }
     case 'settings': {
       const account = currentAccount(payload),
