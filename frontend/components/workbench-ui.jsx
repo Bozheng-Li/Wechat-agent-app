@@ -84,6 +84,6 @@ export function Offline({ status, children }) {
   return status.account?.id ? (
     children
   ) : (
-    <Empty title="先连接微信账号">资料按账号独立保存。连接后即可管理当前账号的工作空间。</Empty>
+    <Empty title="先连接微信账号">资料按账号独立保存。连接后即可管理当前账号的数据与素材。</Empty>
   );
 }

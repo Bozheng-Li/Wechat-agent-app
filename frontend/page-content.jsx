@@ -88,7 +88,7 @@ export function PanelContent({ connection, catalog, state, update }) {
   if (!status || !drafts.persona || !drafts.model || !drafts.storage)
     content = (
       <>
-        <PageHead title="微信 Agent" description="正在读取你的工作台…" />
+        <PageHead title="微信 Agent" description="正在读取你的应用数据…" />
         <div className="wa-card wa-loading-block">
           <div className="wa-skeleton" style={{ width: '42%' }} />
           <div className="wa-skeleton" style={{ width: '78%' }} />
@@ -297,7 +297,7 @@ export function PanelContent({ connection, catalog, state, update }) {
             {
               area: 'storage',
               force: ['storage'],
-              text: '全局工作目录已应用，应用数据已整理到新位置；旧目录继续保留。',
+              text: '数据目录已应用，应用数据已整理到新位置；旧目录继续保留。',
             }
           )
         }

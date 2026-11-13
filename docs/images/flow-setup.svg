@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 300" role="img" aria-labelledby="t d">
+  <title id="t">从安装到第一条自动回复的四步</title>
+  <desc id="d">第一步安装并打开应用，第二步配置模型 API，第三步扫码登录微信，第四步授权会话并开启自动回复。</desc>
+  <rect width="1280" height="300" rx="20" fill="#f3f6f4"/>
+  <g font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">
+    <text x="56" y="58" font-size="13" font-weight="600" letter-spacing="2.6" fill="#60756a">QUICK START</text>
+    <text x="56" y="104" font-size="30" font-weight="700" letter-spacing="-0.6" fill="#20362c">从安装到第一条自动回复</text>
+    <text x="56" y="136" font-size="15" fill="#5b7266">四步都在应用内完成，不需要命令行、Node.js 或 Python。</text>
+
+    <g transform="translate(56 172)">
+      <g>
+        <rect width="272" height="88" rx="14" fill="#fff" stroke="#d7e3db"/>
+        <circle cx="34" cy="34" r="15" fill="#18765a"/>
+        <text x="34" y="39" font-size="14" font-weight="700" fill="#fff" text-anchor="middle">1</text>
+        <text x="60" y="41" font-size="16" font-weight="600" fill="#223c30">安装并打开</text>
+        <text x="22" y="70" font-size="13" fill="#6b8074">运行 Setup.exe，打开“微信 Agent”</text>
+      </g>
+      <g transform="translate(300 0)">
+        <rect width="272" height="88" rx="14" fill="#fff" stroke="#d7e3db"/>
+        <circle cx="34" cy="34" r="15" fill="#18765a"/>
+        <text x="34" y="39" font-size="14" font-weight="700" fill="#fff" text-anchor="middle">2</text>
+        <text x="60" y="41" font-size="16" font-weight="600" fill="#223c30">配置模型</text>
+        <text x="22" y="70" font-size="13" fill="#6b8074">填服务地址、密钥与模型 ID</text>
+      </g>
+      <g transform="translate(600 0)">
+        <rect width="272" height="88" rx="14" fill="#fff" stroke="#d7e3db"/>
+        <circle cx="34" cy="34" r="15" fill="#18765a"/>
+        <text x="34" y="39" font-size="14" font-weight="700" fill="#fff" text-anchor="middle">3</text>
+        <text x="60" y="41" font-size="16" font-weight="600" fill="#223c30">扫码登录</text>
+        <text x="22" y="70" font-size="13" fill="#6b8074">手机微信扫码，等状态变为已连接</text>
+      </g>
+      <g transform="translate(900 0)">
+        <rect width="272" height="88" rx="14" fill="#fff" stroke="#d7e3db"/>
+        <circle cx="34" cy="34" r="15" fill="#18765a"/>
+        <text x="34" y="39" font-size="14" font-weight="700" fill="#fff" text-anchor="middle">4</text>
+        <text x="60" y="41" font-size="16" font-weight="600" fill="#223c30">授权并开启</text>
+        <text x="22" y="70" font-size="13" fill="#6b8074">选会话，开自动回复，先用一个群试</text>
+      </g>
+    </g>
+  </g>
+</svg>

@@ -228,7 +228,7 @@ export function StorageSettings({
   return (
     <>
       <Back label={backLabel} onClick={onBack} />
-      <PageHead icon="folder" title="全局工作目录" description="只需设置一个目录，应用会自动管理各类数据的保存位置。" />
+      <PageHead icon="folder" title="数据目录" description="只需设置一个目录，应用会自动管理各类数据的保存位置。" />
       <Notice notice={notice} area="storage" />
       <div className="wa-settings-stack wa-content-narrow wa-storage-settings">
         <DataRootSettings rpc={rpc} blocked={blocked} />
@@ -246,9 +246,9 @@ export function StorageSettings({
             </div>
           </div>
           <Field
-            label="全局工作目录"
+            label="数据目录"
             id="wa-base-path"
-            help="工作空间、记录、记忆、素材、定时任务、登录资料和缓存都在此目录下自动管理。"
+            help="记录、记忆、素材、定时任务、登录资料和缓存都在此目录下自动管理。"
           >
             <div className="wa-path-field">
               <input
@@ -276,7 +276,7 @@ export function StorageSettings({
           </div>
           <details className="wa-subsection" data-testid="storage-derived-paths">
             <summary>查看自动管理的目录</summary>
-            <p className="wa-help">以下为当前已应用的位置，由全局工作目录自动派生。</p>
+            <p className="wa-help">以下为当前已应用的位置，由数据目录自动派生。</p>
             <dl className="wa-storage-path-list">
             {directories.map(([key, label]) => (
               <div key={key}>
@@ -311,7 +311,7 @@ export function StorageSettings({
           <div className="wa-subsection">
             <h3>本地任务与执行记录</h3>
             <p className="wa-help">内部微信会话归入工作空间总目录下的“微信agent”；生成图片另存于“微信agent/generated-images”。模型和工具执行记录保存在本应用的任务执行轨迹中。</p>
-            <div className="wa-path-value">{storage.workspacePath || '随本地工作目录保存'}</div>
+            <div className="wa-path-value">{storage.workspacePath || '随数据目录保存'}</div>
           </div>
         </details>
       </div>

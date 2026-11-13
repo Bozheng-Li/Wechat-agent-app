@@ -7,7 +7,7 @@ export function Overview({ status, busy, blocked, onAction, onNavigate }) {
   const settings = status.settings || {}, processing = status.processing || {};
   const groups = settings.groups?.length || 0, privates = settings.privatePeers?.length || 0;
   return <>
-    <PageHead icon="grid" title="工作台" description="查看当前账号、消息处理状态与工作配置。">
+    <PageHead icon="grid" title="概览" description="查看账号连接、消息处理状态与自动回复配置。">
       <Button primary icon="people" onClick={() => onNavigate('authorization')}>管理会话</Button>
     </PageHead>
     <div className="wa-stack wa-overview-stack">
@@ -50,7 +50,7 @@ export function Overview({ status, busy, blocked, onAction, onNavigate }) {
         {[
           { icon: 'model', title: '回复模型', value: status.model?.model || '尚未选择模型', help: status.modelChoice ? '使用指定模型' : '使用默认模型', page: 'model', label: '打开模型设置' },
           { icon: 'person', title: '默认助手', value: status.persona?.name || '微信助手', help: '所有会话共用的表达偏好', page: 'persona', label: '编辑默认助手设定' },
-          { icon: 'folder', title: '工作目录', value: status.storage?.basePath || '使用默认工作目录', help: '记录、记忆与任务的保存位置', page: 'storage', label: '打开工作目录设置', path: true },
+          { icon: 'folder', title: '数据目录', value: status.storage?.basePath || '使用默认数据目录', help: '记录、记忆与素材的保存位置', page: 'storage', label: '打开数据目录设置', path: true },
         ].map(item => <button type="button" className="wa-summary-item" key={item.page}
           aria-label={item.label} onClick={() => onNavigate(item.page, 'overview')}>
           <Glyph name={item.icon} />
@@ -63,7 +63,7 @@ export function Overview({ status, busy, blocked, onAction, onNavigate }) {
         </div>
       </section>
       </div>
-      <section className="wa-overview-destinations" aria-label="常用工作区">
+      <section className="wa-overview-destinations" aria-label="常用入口">
         {[
           { page: 'memory', icon: 'memory', title: '记忆库', description: '查看会话记忆与共同约定' },
           { page: 'tasks', icon: 'clock', title: '定时任务', description: '管理提醒与执行回执' },

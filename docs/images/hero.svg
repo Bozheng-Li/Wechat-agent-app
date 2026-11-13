@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 352" role="img" aria-labelledby="title desc">
   <title id="title">微信 Agent App</title>
-  <desc id="desc">独立 Windows 桌面应用，连接消息、记忆与工作。自选模型，按会话授权。</desc>
+  <desc id="desc">独立 Windows 桌面应用，把消息、记忆与提醒放在一处。自选模型，按会话授权。</desc>
   <defs>
     <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r="1" fill="#d5ddd8"/></pattern>
   </defs>
@@ -10,7 +10,7 @@
   <g font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">
     <text x="60" y="55" font-size="13" font-weight="600" letter-spacing="2.8" fill="#60756a">WECHAT AGENT APP</text>
     <text x="57" y="148" font-size="68" font-weight="700" letter-spacing="-2" fill="#20362c">微信 Agent</text>
-    <text x="60" y="203" font-size="26" fill="#50665b">消息、记忆与工作，在同一个地方。</text>
+    <text x="60" y="203" font-size="26" fill="#50665b">消息、记忆与提醒，在同一个地方。</text>
     <path d="M60 242h602" stroke="#d3ded7"/>
     <g font-size="15" fill="#4d6357">
       <circle cx="65" cy="282" r="4" fill="#18765a"/><text x="83" y="287">独立桌面应用</text>
@@ -31,7 +31,7 @@
       <g transform="translate(117 180)" fill="none" stroke="#a4d3b8" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">
         <path d="M0 5c9-4 17-4 23 0 7-4 15-4 24 0v36c-9-4-17-4-24 0-6-4-14-4-23 0Z"/><path d="M23 5v36"/>
       </g>
-      <text x="185" y="195" font-size="19" font-weight="600" fill="#f3f7f4">记忆与工作</text>
+      <text x="185" y="195" font-size="19" font-weight="600" fill="#f3f7f4">记忆与提醒</text>
       <text x="185" y="223" font-size="13" fill="#b1c9ba">留下上下文，安排下一步</text>
       <text x="185" y="246" font-size="11" letter-spacing="1.2" fill="#83b89a">WINDOWS · DESKTOP</text>
     </g>

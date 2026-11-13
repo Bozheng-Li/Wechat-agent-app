@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 360" role="img" aria-labelledby="t d">
+  <title id="t">数据都保存在本机</title>
+  <desc id="d">应用在用户目录下保存配置、加密密钥、记忆、素材与记录；模型与搜索/生图服务只接收完成任务所需的输入。</desc>
+  <rect width="1280" height="360" rx="20" fill="#f3f6f4"/>
+  <g font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">
+    <text x="56" y="56" font-size="13" font-weight="600" letter-spacing="2.6" fill="#60756a">WHERE YOUR DATA LIVES</text>
+    <text x="56" y="102" font-size="30" font-weight="700" letter-spacing="-0.6" fill="#20362c">数据留在你自己的电脑上</text>
+
+    <g transform="translate(56 132)">
+      <rect width="520" height="192" rx="16" fill="#fff" stroke="#d7e3db"/>
+      <text x="24" y="34" font-size="14" font-weight="700" fill="#223c30">数据目录</text>
+      <text x="24" y="56" font-size="12.5" fill="#71857a">默认 %APPDATA%\dsh-Wechat-app，可切换</text>
+      <g font-size="13" fill="#4d6357">
+        <text x="24" y="88">providers.json　模型服务与能力</text>
+        <text x="24" y="112">credentials\　API Key（DPAPI 加密）</text>
+        <text x="24" y="136">config.yaml / prompts\　设置与提示词</text>
+        <text x="24" y="160">storage\ / workspace\　记录、记忆、素材</text>
+      </g>
+      <g transform="translate(24 170)">
+        <rect width="196" height="14" rx="7" fill="#e8f1ec"/>
+        <text x="6" y="11" font-size="10" fill="#5b7266"> </text>
+      </g>
+    </g>
+
+    <g transform="translate(640 132)">
+      <rect width="272" height="92" rx="16" fill="#203b2d"/>
+      <text x="22" y="36" font-size="16" font-weight="600" fill="#f3f7f4">你配置的模型</text>
+      <text x="22" y="60" font-size="12.5" fill="#b1c9ba">Chat Completions 兼容接口</text>
+      <text x="22" y="78" font-size="11" letter-spacing="1.1" fill="#83b89a">只发送本轮需要的上下文</text>
+
+      <rect x="288" width="272" height="92" rx="16" fill="#fff" stroke="#d7e3db"/>
+      <text x="22" y="36" font-size="16" font-weight="600" fill="#223c30">按需调用的服务</text>
+      <text x="22" y="60" font-size="12.5" fill="#6b8074">搜索、生图（可选）</text>
+      <text x="22" y="78" font-size="11" letter-spacing="1.1" fill="#8a9c91">不配置就不调用</text>
+
+      <rect y="112" width="560" height="80" rx="16" fill="#eef4f0" stroke="#d7e3db"/>
+      <text x="22" y="142" font-size="13.5" font-weight="600" fill="#223c30">没有内置密钥，也不经过项目作者的服务器</text>
+      <text x="22" y="166" font-size="12.5" fill="#5b7266">费用由你自己的服务商收取；换电脑或换 Windows 用户需要重新填写密钥。</text>
+    </g>
+  </g>
+</svg>

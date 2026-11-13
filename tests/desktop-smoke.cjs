@@ -83,6 +83,16 @@ async function main() {
   const js = code => bounded(window.webContents.executeJavaScript(code), 'Renderer evaluation');
   const capture = async label => {
     await js('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))');
+    // Doc screenshots are published as-is: replace any local drive path shown in
+    // the page so the captured image does not leak this machine's folders.
+    await js(`(() => {
+      for (const node of document.querySelectorAll('*')) {
+        if (node.children.length || !node.textContent) continue;
+        if (!/[A-Za-z]:\\\\/.test(node.textContent)) continue;
+        node.textContent = node.textContent.replace(/[A-Za-z]:[^\\s"'<>]*/g, '本机测试路径已隐藏');
+      }
+      return true;
+    })()`);
     return bounded(window.webContents.capturePage(), label);
   };
   const openPage = async (page, selector = '[data-testid="nav-' + page + '"]') => {

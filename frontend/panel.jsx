@@ -40,7 +40,7 @@ export function WechatPanel({ connection, catalog }) {
             </div>
             <div>
               <strong>微信 Agent</strong>
-              <small>消息 · 记忆 · 工作</small>
+              <small>消息 · 记忆 · 提醒</small>
             </div>
           </div>
           <button type="button" className="wa-nav-mobile" data-testid="mobile-navigation" ref={menuButton}
@@ -122,7 +122,7 @@ export function WechatPanel({ connection, catalog }) {
               )}
               {page !== navPage && page !== 'recovery' && <>
                 <span className="wa-breadcrumb-divider" aria-hidden="true">/</span>
-                <span>{pageLabels[page] || '工作台'}</span>
+                <span>{pageLabels[page] || '概览'}</span>
               </>}
               {page === navPage && <>
                 <span className="wa-breadcrumb-divider" aria-hidden="true">/</span>
