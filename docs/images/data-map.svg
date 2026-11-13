@@ -1,41 +1,43 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 360" role="img" aria-labelledby="t d">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 420" role="img" aria-labelledby="t d">
   <title id="t">数据都保存在本机</title>
-  <desc id="d">应用在用户目录下保存配置、加密密钥、记忆、素材与记录；模型与搜索/生图服务只接收完成任务所需的输入。</desc>
-  <rect width="1280" height="360" rx="20" fill="#f3f6f4"/>
+  <desc id="d">数据目录里保存模型服务配置、加密后的 API Key、业务设置与提示词、会话记忆与素材；密钥由 Windows DPAPI 加密，换电脑需要重新填写，卸载不会删除数据目录。</desc>
+  <rect width="1280" height="420" rx="20" fill="#f3f6f4"/>
   <g font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">
     <text x="56" y="56" font-size="13" font-weight="600" letter-spacing="2.6" fill="#60756a">WHERE YOUR DATA LIVES</text>
     <text x="56" y="102" font-size="30" font-weight="700" letter-spacing="-0.6" fill="#20362c">数据留在你自己的电脑上</text>
 
-    <g transform="translate(56 132)">
-      <rect width="520" height="192" rx="16" fill="#fff" stroke="#d7e3db"/>
-      <text x="24" y="34" font-size="14" font-weight="700" fill="#223c30">数据目录</text>
-      <text x="24" y="56" font-size="12.5" fill="#71857a">默认 %APPDATA%\dsh-Wechat-app，可切换</text>
-      <g font-size="13" fill="#4d6357">
-        <text x="24" y="88">providers.json　模型服务与能力</text>
-        <text x="24" y="112">credentials\　API Key（DPAPI 加密）</text>
-        <text x="24" y="136">config.yaml / prompts\　设置与提示词</text>
-        <text x="24" y="160">storage\ / workspace\　记录、记忆、素材</text>
-      </g>
-      <g transform="translate(24 170)">
-        <rect width="196" height="14" rx="7" fill="#e8f1ec"/>
-        <text x="6" y="11" font-size="10" fill="#5b7266"> </text>
-      </g>
+    <rect x="56" y="132" width="560" height="240" rx="16" fill="#fff" stroke="#d7e3db"/>
+    <text x="80" y="166" font-size="15" font-weight="600" fill="#223c30">数据目录</text>
+    <text x="80" y="188" font-size="12" fill="#71857a">默认 %APPDATA%\dsh-Wechat-app，可切换</text>
+
+    <g font-family="Cascadia Mono, Consolas, ui-monospace, monospace" font-size="12.5" fill="#4d6357">
+      <text x="80" y="222">providers.json</text>
+      <text x="232" y="222" font-family="Segoe UI, Microsoft YaHei, PingFang SC, sans-serif">模型服务与能力</text>
+
+      <text x="80" y="248">credentials\</text>
+      <text x="232" y="248" font-family="Segoe UI, Microsoft YaHei, PingFang SC, sans-serif">API Key（DPAPI 加密）</text>
+
+      <text x="80" y="274">config.yaml</text>
+      <text x="232" y="274" font-family="Segoe UI, Microsoft YaHei, PingFang SC, sans-serif">业务设置与提示词</text>
+
+      <text x="80" y="300">storage\</text>
+      <text x="232" y="300" font-family="Segoe UI, Microsoft YaHei, PingFang SC, sans-serif">会话、记忆、任务与回执</text>
+
+      <text x="80" y="326">workspace\</text>
+      <text x="232" y="326" font-family="Segoe UI, Microsoft YaHei, PingFang SC, sans-serif">素材、生成结果与临时文件</text>
     </g>
+    <text x="80" y="354" font-size="11.5" fill="#8a9c91">整目录复制即可换机器；不要只拷其中一部分。</text>
 
-    <g transform="translate(640 132)">
-      <rect width="272" height="92" rx="16" fill="#203b2d"/>
-      <text x="22" y="36" font-size="16" font-weight="600" fill="#f3f7f4">你配置的模型</text>
-      <text x="22" y="60" font-size="12.5" fill="#b1c9ba">Chat Completions 兼容接口</text>
-      <text x="22" y="78" font-size="11" letter-spacing="1.1" fill="#83b89a">只发送本轮需要的上下文</text>
+    <rect x="648" y="132" width="576" height="72" rx="14" fill="#fff" stroke="#d7e3db"/>
+    <text x="674" y="162" font-size="14.5" font-weight="600" fill="#223c30">API Key 只对本机用户可读</text>
+    <text x="674" y="185" font-size="12.5" fill="#6b8074">Windows DPAPI 加密，换 Windows 用户或换电脑需要重新填写</text>
 
-      <rect x="288" width="272" height="92" rx="16" fill="#fff" stroke="#d7e3db"/>
-      <text x="22" y="36" font-size="16" font-weight="600" fill="#223c30">按需调用的服务</text>
-      <text x="22" y="60" font-size="12.5" fill="#6b8074">搜索、生图（可选）</text>
-      <text x="22" y="78" font-size="11" letter-spacing="1.1" fill="#8a9c91">不配置就不调用</text>
+    <rect x="648" y="216" width="576" height="72" rx="14" fill="#fff" stroke="#d7e3db"/>
+    <text x="674" y="246" font-size="14.5" font-weight="600" fill="#223c30">备份就是复制目录</text>
+    <text x="674" y="269" font-size="12.5" fill="#6b8074">关闭应用后复制整个目录；恢复时把它设为数据目录</text>
 
-      <rect y="112" width="560" height="80" rx="16" fill="#eef4f0" stroke="#d7e3db"/>
-      <text x="22" y="142" font-size="13.5" font-weight="600" fill="#223c30">没有内置密钥，也不经过项目作者的服务器</text>
-      <text x="22" y="166" font-size="12.5" fill="#5b7266">费用由你自己的服务商收取；换电脑或换 Windows 用户需要重新填写密钥。</text>
-    </g>
+    <rect x="648" y="300" width="576" height="72" rx="14" fill="#eef4f0" stroke="#cfe0d6"/>
+    <text x="674" y="330" font-size="14.5" font-weight="600" fill="#2c4a3a">卸载不会删掉这些数据</text>
+    <text x="674" y="353" font-size="12.5" fill="#6b8074">安装包只卸载程序；要彻底清理请手动删除数据目录</text>
   </g>
 </svg>

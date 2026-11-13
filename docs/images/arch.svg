@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 420" role="img" aria-labelledby="t d">
+  <title id="t">应用与微信、模型、本机数据的关系</title>
+  <desc id="d">微信 Agent App 在你的电脑上运行，和已授权的微信会话双向收发，读写本机数据，调用你配置的模型 API，按需调用可选的搜索与生图服务。</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#7f9a8b"/>
+    </marker>
+    <marker id="dot" viewBox="0 0 8 8" refX="4" refY="4" markerWidth="5" markerHeight="5">
+      <circle cx="4" cy="4" r="3" fill="#18765a"/>
+    </marker>
+  </defs>
+  <rect width="1280" height="420" rx="20" fill="#f3f6f4"/>
+  <g font-family="Segoe UI, Microsoft YaHei, PingFang SC, Noto Sans CJK SC, sans-serif">
+    <text x="56" y="56" font-size="13" font-weight="600" letter-spacing="2.6" fill="#60756a">HOW IT RUNS</text>
+    <text x="56" y="102" font-size="30" font-weight="700" letter-spacing="-0.6" fill="#20362c">应用在你电脑上，只连你给它的东西</text>
+
+    <g>
+      <rect x="56" y="150" width="212" height="96" rx="14" fill="#fff" stroke="#d7e3db"/>
+      <text x="80" y="188" font-size="16" font-weight="600" fill="#223c30">已授权会话</text>
+      <text x="80" y="212" font-size="12.5" fill="#6b8074">私聊 · 群聊</text>
+
+      <rect x="380" y="138" width="252" height="120" rx="16" fill="#203b2d"/>
+      <text x="408" y="180" font-size="17" font-weight="600" fill="#f3f7f4">微信 Agent App</text>
+      <text x="408" y="204" font-size="12.5" fill="#b1c9ba">在你自己的电脑上运行</text>
+      <text x="408" y="230" font-size="11" letter-spacing="1.1" fill="#83b89a">WINDOWS · DESKTOP</text>
+
+      <rect x="744" y="126" width="232" height="72" rx="14" fill="#fff" stroke="#d7e3db"/>
+      <text x="768" y="156" font-size="15" font-weight="600" fill="#223c30">本机数据</text>
+      <text x="768" y="178" font-size="12.5" fill="#6b8074">记忆 · 素材 · 配置</text>
+
+      <rect x="744" y="222" width="232" height="72" rx="14" fill="#fff" stroke="#d7e3db"/>
+      <text x="768" y="252" font-size="15" font-weight="600" fill="#223c30">你配置的模型 API</text>
+      <text x="768" y="274" font-size="12.5" fill="#6b8074">只发送本轮需要的上下文</text>
+
+      <rect x="1046" y="174" width="178" height="72" rx="14" fill="#eef4f0" stroke="#cfe0d6" stroke-dasharray="6 5"/>
+      <text x="1070" y="204" font-size="15" font-weight="600" fill="#2c4a3a">搜索 / 生图</text>
+      <text x="1070" y="226" font-size="12.5" fill="#6b8074">可选，不配不调用</text>
+    </g>
+
+    <g stroke="#7f9a8b" stroke-width="2" fill="none">
+      <path d="M268 198 H372" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+      <path d="M632 176 H700 V162 H736" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+      <path d="M632 220 H700 V258 H736" marker-end="url(#arrow)" marker-start="url(#arrow)"/>
+    </g>
+    <g stroke="#7f9a8b" stroke-width="2" stroke-dasharray="5 6" fill="none">
+      <path d="M632 258 V300 H1135 V254" marker-end="url(#arrow)"/>
+    </g>
+    <text x="760" y="322" font-size="12" fill="#71857a">按需调用</text>
+
+    <text x="56" y="368" font-size="13" fill="#5b7266">收发消息走你自己的微信账号；回复与记忆的推理由你配置的模型完成；数据不经过项目作者的服务器。</text>
+  </g>
+</svg>
