@@ -1,4 +1,4 @@
-import { ChannelError } from './contracts.mjs';
+import { ChannelError } from './errors.mjs';
 
 export const audienceUserId = id => typeof id === 'string' && /^[\w.:-]{1,256}$/.test(id);
 export const audienceLabelId = id => typeof id === 'string' && /^[1-9]\d{0,9}$/.test(id) && BigInt(id) <= 0xffffffffn;

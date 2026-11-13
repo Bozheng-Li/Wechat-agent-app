@@ -1,3 +1,4 @@
+import { ChannelError } from './errors.mjs';
 import { personaText } from '../prompts/personas/text.mjs';
 import { personaFromPreset } from '../prompts/personas/catalog.mjs';
 import { validateDefaultAudience } from './moments-audience.mjs';
@@ -11,14 +12,7 @@ export const DEFAULT_TAVILY_URL = 'https://api.tavily.com';
 export const DEFAULT_DEEPSEEK_URL = 'https://api.deepseek.com/anthropic/v1';
 export const DEFAULT_DEEPSEEK_MODEL = 'deepseek-v4-flash';
 
-export class ChannelError extends Error {
-  constructor(code, message, details = {}) {
-    super(message);
-    this.name = 'ChannelError';
-    this.code = code;
-    this.details = details;
-  }
-}
+export { ChannelError };
 
 export function searchBaseURL(input = DEFAULT_TAVILY_URL, label = 'Tavily') {
   let url;
