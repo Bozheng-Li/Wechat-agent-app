@@ -428,6 +428,16 @@ Get-FileHash -Algorithm SHA256 .\Wechat-Agent-App-0.1.7-preview.1-Setup.exe
 
 <details>
 <details>
+<details>
+<summary><strong>为什么更新要下载 239 MB？能不能小一点？</strong></summary>
+
+从 0.1.7-preview.3 起改成增量下载：应用拿新版和新旧两个 `.blockmap` 逐块对比，新版本里没变的块直接从本地留下的旧安装包拷贝，只下载变化的部分。实测相邻两个版本之间 99% 以上的块是相同的，一次更新常常只有几 MB。
+
+两个前提：本地要留着上一个安装包（应用会自动保留最近两个，放在数据目录的 `updates/` 里），以及服务器支持分段下载。任何一步不满足就自动退回整包下载，不会把不完整的安装包装上去。下载完成后界面会显示「已用增量更新，节省 XXX MB」。
+
+从旧版本升级到 0.1.7-preview.3 的这一次仍然是整包，因为旧版本里还没有这段逻辑。
+
+</details>
 <summary><strong>发朋友圈能不能只屏蔽几个人，而不是屏蔽所有人？</strong></summary>
 
 能。**朋友圈 → 发布** 里有一项「可见范围」：

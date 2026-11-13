@@ -1,11 +1,14 @@
 import { Button } from './button.jsx';
 import { Glyph } from './glyph.jsx';
-import { formatBytes } from '../shared/updates.mjs';
+import { formatBytes, formatSavedBytes } from '../shared/updates.mjs';
 
 // A single line above the workspace, so a new release never blocks the app.
 export function UpdateBanner({ update }) {
   const { state, download, cancel, install, dismiss } = update;
   const percent = state.percent || 0;
+  const saved = state.phase === 'ready' && state.differential?.used
+    ? formatSavedBytes(state.differential.savedBytes)
+    : '';
   return (
     <div className="wa-update-banner" data-testid="update-banner" data-phase={state.phase} role="status">
       <span className="wa-update-mark" aria-hidden="true"><Glyph name="download" /></span>
@@ -19,6 +22,7 @@ export function UpdateBanner({ update }) {
           {state.phase === 'ready' && '已通过 SHA-512 校验，安装时应用会自动关闭并重新打开'}
           {state.phase === 'installing' && '安装程序已启动，本应用即将退出'}
         </p>
+        {saved && <p className="wa-update-note" data-testid="update-delta-note">已用增量更新，节省 {saved}</p>}
         {state.phase === 'downloading' && (
           <div className="wa-update-progress" role="progressbar" aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100} aria-label="更新下载进度">
             <span style={{ width: percent + '%' }} />

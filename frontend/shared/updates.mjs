@@ -5,6 +5,15 @@ export function formatBytes(bytes) {
   return (value / (1024 * 1024)).toFixed(value >= 100 * 1024 * 1024 ? 0 : 1) + ' MB';
 }
 
+// Savings are always a large fraction of a 200 MB+ installer, so one decimal
+// keeps the note honest without turning it into a number nobody reads.
+export function formatSavedBytes(bytes) {
+  const value = Number(bytes);
+  if (!Number.isFinite(value) || value <= 0) return '';
+  if (value < 1024 * 1024) return Math.max(1, Math.round(value / 1024)) + ' KB';
+  return (value / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
 export function formatReleaseDate(value) {
   if (!value) return '';
   const date = new Date(value);

@@ -13,6 +13,7 @@ const idle = {
   path: '',
   message: '',
   checkedAt: null,
+  differential: null,
 };
 
 // Update state lives in the main process; this hook only mirrors it and keeps
@@ -86,6 +87,9 @@ export function useUpdate({ autoCheck = true, delay = 4000 } = {}) {
       percent: 100,
       received: reply.value?.size || current.total,
       path: reply.value?.path || '',
+      // Only the main process knows whether the bytes were reused; the banner
+      // reports the saving and nothing else depends on it.
+      differential: reply.value?.differential || { used: false },
       message: '',
     }));
     return reply.value;
