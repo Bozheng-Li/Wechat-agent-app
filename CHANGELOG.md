@@ -1,5 +1,11 @@
 # 更新日志
 
+## 0.1.7-preview.5 - 2026-11-13
+
+- **修复 preview.4 打不开**：preview.4 安装后一启动就弹「A JavaScript error occurred in the main process / Cannot find module './blockmap.cjs'」。原因是 preview.3 引入增量更新时新增的 `desktop/blockmap.cjs` 没有写进 `electron-builder.json` 的打包白名单，主进程 `updates.cjs` 一 `require` 就失败，启动即崩。现在已把该文件加入白名单，并以 `scripts/audit-package.mjs` 核对打包字节。
+- 新增打包守卫测试 `tests/app-packaging.test.mjs`：逐个比对 `desktop/*.cjs` 与白名单、并检查模块里每个相对 `require` 是否随包发出，以后新增桌面模块漏配会直接测试失败，而不是发到用户手上才崩。
+- 已经装上 preview.4 的用户：应用起不来就没法走自动更新，需要手动安装 preview.5（或者把 `blockmap.cjs` 拷进安装目录的 `resources\app\desktop\` 也能临时救活）。
+
 ## 0.1.7-preview.4 - 2026-11-13
 
 - **新增「默认屏蔽名单」**：在 **朋友圈 → 发朋友圈** 勾好标签与联系人后点「保存为默认名单」，这份名单按微信号存在账号设置里；下次打开发布页会自动预填，不用每次重勾。页面上明确写着「勾选即生效，只对这一次发布有效」，想长期生效就存成默认。

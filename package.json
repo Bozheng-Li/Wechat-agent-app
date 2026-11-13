@@ -1,7 +1,7 @@
 {
   "name": "dsh-wechat-app",
   "productName": "Wechat Agent App",
-  "version": "0.1.7-preview.4",
+  "version": "0.1.7-preview.5",
   "description": "独立运行的微信助手：自然聊天、持久记忆、朋友圈与自动化",
   "author": "Wechat Agent contributors",
   "private": true,

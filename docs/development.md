@@ -59,6 +59,8 @@ npm run audit:package
 
 安装包包含必要运行组件、依赖许可和使用文档；不包含账号数据、模型密钥、测试资料或源码仓库中的开发依赖。包内容审计会核对构建文件、运行时、文档和组件哈希。
 
+`electron-builder.json` 的 `files` 是白名单，只有列出的文件才会进安装包，所以**新增 `desktop/` 下的模块后必须同步加进去**：0.1.7-preview.4 就是因为漏了 `desktop/blockmap.cjs`，装完一启动就报 `Cannot find module './blockmap.cjs'`。`tests/app-packaging.test.mjs` 会比对白名单与 `desktop/*.cjs` 及其相对 `require`，漏配直接让 `npm test` 失败。
+
 Release 对应相同版本的源码标签，安装包作为 Release 附件提供；`release/`、`artifacts/`、账号目录与运行组件二进制均不进入 Git 提交。
 
 ## 代码结构
