@@ -1,5 +1,4 @@
 import { personaText, emptyNaturalSettings } from "../../shared/contracts.mjs";
-import { splitLines } from "./conversations.mjs";
 
 export const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
@@ -16,8 +15,10 @@ export const modelDraft = (value = {}) => ({
   vision: value.vision ?? true,
   visionModel: value.visionModel ?? null,
   webSearch: value.webSearch ?? false,
-  searchProvider: value.searchProvider ?? 'tavily',
+  searchProvider: value.searchProvider === 'dsh' ? 'deepseek' : value.searchProvider ?? 'tavily',
   tavilyBaseURL: value.tavilyBaseURL ?? 'https://api.tavily.com',
+  deepseekBaseURL: value.deepseekBaseURL ?? 'https://api.deepseek.com/anthropic/v1',
+  deepseekModel: value.deepseekModel ?? 'deepseek-v4-flash',
 });
 
 export const storageDraft = (value = {}) => ({ basePath: value.basePath || '' });
@@ -47,8 +48,6 @@ export const naturalPayload = (value) =>
 
 export const configDraft = (value = {}) => ({
   mode: value.mode || 'default',
-  executionMode: value.executionMode || 'chat',
-  workSenderIds: (value.workSenderIds || []).join('\n'),
   remoteEnabled: value.remoteEnabled ?? false,
   adminIds: [...(value.adminIds || [])],
   intervalMode: value.intervalMode || 'random',
@@ -64,7 +63,6 @@ export const configDraft = (value = {}) => ({
 
 export const configPayload = ({ personaMode, persona, ...value }) => ({
   ...value,
-  workSenderIds: splitLines(value.workSenderIds),
   natural: naturalPayload(value.natural),
   fixedMessages: Number(value.fixedMessages),
   memoryWindowChars: value.memoryWindowChars.trim() === '' ? null : Number(value.memoryWindowChars),

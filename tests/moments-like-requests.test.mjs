@@ -9,7 +9,6 @@ import { MomentsService } from '../modules/moments/service.mjs';
 import { momentsLikeRequestTool, isMomentsLikeRequest } from '../modules/tools/moments-likes.mjs';
 import { momentsLikeRequestArgs, isSelfMomentsLikeRequest } from '../shared/moments-like-request.mjs';
 import { planProgressiveTools } from '../modules/tools/progressive.mjs';
-import { workModelTools } from '../modules/tools/index.mjs';
 import { ChannelError } from '../shared/contracts.mjs';
 
 const accountId = 'like-bot', room = 'like-room@chatroom';
@@ -245,10 +244,10 @@ test('cancellation during submission suppresses output and permanently stops the
   const result = await f.like({}, 'cancelled', '帮我最新三条朋友圈点赞'); assert.equal(result.ok, false); assert.equal(f.writes.length, 1);
 });
 
-test('native work registers the composite port and progressive mode preloads direct like requests', async () => {
-  const calls = [], definitions = workModelTools({ surface: 'native', cwd: process.cwd(), request: '帮我点赞', limits: {}, assertAllowed() {}, onOperation() {},
-    moments: { read: async () => ({}), likeRecent: async args => { calls.push(args); return { ok: true, liked: 1 }; } } });
-  const tool = definitions.find(value => value.name === 'wechat_moments_like_recent'); assert(tool);
+test('the like tool requests likes through the injected port and progressive mode preloads direct like requests', async () => {
+  const calls = [], tool = momentsLikeRequestTool({ assertAllowed() {},
+    subjects: { account: { id: accountId }, speaker: { id: 'bob' }, members: [] },
+    like: async (args, signal) => { calls.push({ args, signal }); return { ok: true, liked: 1 }; } });
   await tool.execute({ subject: 'speaker' }, { signal: new AbortController().signal }); assert.equal(calls.length, 1);
   assert(planProgressiveTools([tool], '帮我点个赞').initial.includes(tool));
   const deferred = planProgressiveTools([tool], '你好'); assert.equal(deferred.deferredGroups[0].id, 'moments-like');

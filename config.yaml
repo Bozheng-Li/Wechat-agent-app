@@ -13,6 +13,8 @@ modelConfig:
   webSearch: false
   searchProvider: tavily
   tavilyBaseURL: https://api.tavily.com
+  deepseekBaseURL: https://api.deepseek.com/anthropic/v1
+  deepseekModel: deepseek-v4-flash
 persona:
   name: 微信助手
   aliases: []

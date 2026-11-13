@@ -6,7 +6,7 @@ import { ChannelError, publicError } from '../../shared/contracts.mjs';
 import { momentsId } from '../../shared/moments.mjs';
 import { identity } from '../../backend/storage/keys.mjs';
 import { atomicBytes } from '../../backend/storage/atomic-text.mjs';
-import { workPath } from '../work/policy.mjs';
+import { workPath } from '../paths.mjs';
 import { assertRemoteAuthorized } from '../remote/authorization/policy.mjs';
 import { interactionOptions, interactionEdits, interactionId, interactionHasLike, interactionHasComment,
   interactionRunStates, interactionStepStates } from '../../shared/moments-interactions.mjs';

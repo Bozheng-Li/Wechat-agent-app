@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { atomicBytes } from '../../backend/storage/atomic-text.mjs';
 import { publicError } from '../../shared/contracts.mjs';
-import { workPath } from '../work/policy.mjs';
+import { workPath } from '../paths.mjs';
 import { validateAudienceSelection, audienceUserId } from '../../shared/moments-audience.mjs';
 import { MomentsLikeRequests } from './like-requests.mjs';
 import { momentsSubjectContext } from '../../shared/moments-subject.mjs';

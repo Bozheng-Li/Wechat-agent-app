@@ -45,7 +45,7 @@ export function ImageGenerationSettings({ status, blocked, onAction, onBack, bac
   const reset = () => { setDraft(saved); setModelInputs({}); setSelectedId(saved.defaultProviderId); };
   const submit = async () => {
     setNotice(''); const settings = imageGenerationSettings({ ...draft, providers: draft.providers.map(provider => preserveTimeValues('provider', provider, saved.providers.find(row => row.id === provider.id))) });
-    if (await onAction('imageGeneration.configure', { settings, preserveTimeSettings: true })) { setDraft(settings); setModelInputs({}); setNotice('接口与模型设置已保存；生成结果通过工作任务回传。'); }
+    if (await onAction('imageGeneration.configure', { settings, preserveTimeSettings: true })) { setDraft(settings); setModelInputs({}); setNotice('接口与模型设置已保存；生成结果用于朋友圈与素材。'); }
   };
   const keyDisabled = blocked || dirty || !savedProvider?.endpoint || !status.imageGeneration?.credentialStore;
   const saveKey = async () => {
@@ -57,7 +57,7 @@ export function ImageGenerationSettings({ status, blocked, onAction, onBack, bac
   };
   return <>
     <Back label={backLabel || '返回设置'} onClick={onBack} />
-    <PageHead icon="image" title="图片生成" description="管理生图接口与模型，生成结果通过工作任务回传微信。" />
+    <PageHead icon="image" title="图片生成" description="管理生图接口与模型，为朋友圈和素材生成图片。" />
     {notice && <div className="wa-alert is-success" role="status">{notice}</div>}
     <div className="wa-settings-stack wa-image-generation-settings">
     <form className="wa-settings-document wa-settings-form-sections" data-testid="image-generation-settings" onSubmit={event => { event.preventDefault(); void submit(); }}>

@@ -1,10 +1,15 @@
 import { useState } from 'react';
 
-const names = { tavily: 'Tavily' };
+const names = { deepseek: 'DeepSeek', tavily: 'Tavily' };
+const missing = {
+  deepseek: '尚未保存 DeepSeek 搜索密钥，可直接填写 DeepSeek 官方 API Key。',
+  tavily: '尚未保存 Tavily 搜索密钥。',
+};
 
 export function SearchControls({ draft, status, blocked, onChange, Field }) {
-  const selected = draft.searchProvider || 'tavily',
-    last = status.lastSearch;
+  const selected = draft.searchProvider === 'dsh' ? 'deepseek' : draft.searchProvider || 'tavily',
+    last = status.lastSearch,
+    deepseek = selected === 'deepseek';
   return (
     <div className="wa-search-controls" data-testid="search-settings">
       <Field label="搜索服务" id="wa-search-provider">
@@ -15,22 +20,54 @@ export function SearchControls({ draft, status, blocked, onChange, Field }) {
           disabled={blocked || !draft.webSearch}
           onChange={(event) => onChange({ ...draft, searchProvider: event.target.value })}
         >
+          <option value="deepseek">DeepSeek 搜索</option>
           <option value="tavily">Tavily 搜索</option>
         </select>
       </Field>
-      <Field label="Tavily 服务地址" id="wa-tavily-url" help="填写 Tavily 或兼容服务的 HTTPS 地址。">
-          <input
-            className="wa-input"
-            id="wa-tavily-url"
-            type="url"
-            value={draft.tavilyBaseURL}
-            disabled={blocked || !draft.webSearch}
-            onChange={(event) => onChange({ ...draft, tavilyBaseURL: event.target.value })}
-          />
-      </Field>
-      <p className="wa-help">
-        通过已配置的 Tavily API 查询必要的公开主题，回复保留来源。
-      </p>
+      {deepseek ? (
+        <div className="wa-search-fields" data-provider="deepseek">
+          <Field
+            label="DeepSeek 服务地址"
+            id="wa-deepseek-url"
+            help="填写 DeepSeek 或其他 Anthropic 兼容服务的 HTTPS 地址，联网搜索调用该地址下的 /messages 接口。"
+          >
+            <input
+              className="wa-input"
+              id="wa-deepseek-url"
+              type="url"
+              value={draft.deepseekBaseURL}
+              disabled={blocked || !draft.webSearch}
+              onChange={(event) => onChange({ ...draft, deepseekBaseURL: event.target.value })}
+            />
+          </Field>
+          <Field label="搜索模型" id="wa-deepseek-model" help="选择服务端支持 web_search 工具的模型，默认 deepseek-v4-flash。">
+            <input
+              className="wa-input"
+              id="wa-deepseek-model"
+              type="text"
+              maxLength={120}
+              value={draft.deepseekModel}
+              disabled={blocked || !draft.webSearch}
+              onChange={(event) => onChange({ ...draft, deepseekModel: event.target.value })}
+            />
+          </Field>
+          <p className="wa-help">由 DeepSeek 在服务端完成检索并回传来源列表，不需要额外的搜索引擎账号。</p>
+        </div>
+      ) : (
+        <div className="wa-search-fields" data-provider="tavily">
+          <Field label="Tavily 服务地址" id="wa-tavily-url" help="填写 Tavily 或兼容服务的 HTTPS 地址。">
+            <input
+              className="wa-input"
+              id="wa-tavily-url"
+              type="url"
+              value={draft.tavilyBaseURL}
+              disabled={blocked || !draft.webSearch}
+              onChange={(event) => onChange({ ...draft, tavilyBaseURL: event.target.value })}
+            />
+          </Field>
+          <p className="wa-help">通过已配置的 Tavily API 查询必要的公开主题，回复保留来源。</p>
+        </div>
+      )}
       {last && (
         <p className="wa-help" data-testid="search-status" role={last.ok ? 'status' : 'alert'}>
           {last.fallbackUsed ? `已从${names[last.primaryProvider] || '默认接口'}回退至${names[last.provider] || '备用接口'}：` : `${names[last.provider] || '搜索服务'}最近一次查询：`}
@@ -42,7 +79,7 @@ export function SearchControls({ draft, status, blocked, onChange, Field }) {
 }
 
 export function SearchCredentials({ status, blocked, busy, onSave, Field, Button }) {
-  const [values, setValues] = useState({ tavily: '' });
+  const [values, setValues] = useState({ deepseek: '', tavily: '' });
   const save = async (provider) => {
     const submitted = values[provider],
       result = await onSave(provider, submitted);
@@ -65,11 +102,7 @@ export function SearchCredentials({ status, blocked, busy, onSave, Field, Button
             <Field
               label={`${names[provider]} API Key`}
               id={`wa-search-key-${provider}`}
-              help={
-                status.search?.credentials?.[provider]
-                  ? '已保存；填写新密钥可替换。'
-                  : '尚未保存 Tavily 搜索密钥。'
-              }
+              help={status.search?.credentials?.[provider] ? '已保存；填写新密钥可替换。' : missing[provider]}
             >
               <input
                 className="wa-input"

@@ -4,10 +4,13 @@ import { pageLabels } from "./shared/labels.mjs";
 import { Glyph } from "./components/glyph.jsx";
 import { Button } from "./components/button.jsx";
 import { usePanel } from "./hooks/use-panel.mjs";
+import { useUpdate } from "./hooks/use-update.mjs";
+import { UpdateBanner } from "./components/update-banner.jsx";
 import { PanelContent } from "./page-content.jsx";
 
 export function WechatPanel({ connection, catalog }) {
   const state = usePanel(connection);
+  const update = useUpdate();
   const [menuOpen, setMenuOpen] = useState(false);
   const navRef = useRef(null), menuButton = useRef(null);
   useEffect(() => {
@@ -24,8 +27,8 @@ export function WechatPanel({ connection, catalog }) {
   }, [menuOpen]);
   const { motion, status, page, memoryTab, busy, workspaceRef, action, navigate, navPage, warning } = state;
   const sectionLabel = ['overview', 'authorization', 'records', 'moments'].includes(navPage) ? '日常'
-    : ['tasks', 'work', 'digests', 'traces'].includes(navPage) ? '自动化' : '管理';
-  const content = <PanelContent connection={connection} catalog={catalog} state={state} />;
+    : ['tasks', 'digests', 'traces'].includes(navPage) ? '自动化' : '管理';
+  const content = <PanelContent connection={connection} catalog={catalog} state={state} update={update} />;
   return (
     <div className="wa-panel" data-motion={motion.enabled ? 'on' : 'off'} data-page={page}>
       <style>{css}</style>
@@ -60,7 +63,6 @@ export function WechatPanel({ connection, catalog }) {
                 [
                   ['traces', 'history', '任务执行轨迹'],
                   ['tasks', 'clock', '定时任务'],
-                  ['work', 'work', '工作任务'],
                   ['digests', 'digest', '群聊简报'],
                 ],
               ],
@@ -149,6 +151,9 @@ export function WechatPanel({ connection, catalog }) {
               </div>
             </div>
           )}
+          <div className="wa-update-slot" aria-live="polite">
+            {update.banner && state.page !== 'updates' && <UpdateBanner update={update} />}
+          </div>
           {content}
         </main>
       </div>

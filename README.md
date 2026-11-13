@@ -9,14 +9,14 @@
 
 <p>
   <img src="https://img.shields.io/badge/Windows-10%20%2F%2011%20%C2%B7%20x64-243a32?style=flat-square" alt="Windows 10 / 11 x64" />
-  <img src="https://img.shields.io/badge/version-0.1.0--preview.1-12785a?style=flat-square" alt="0.1.0-preview.1" />
+  <img src="https://img.shields.io/badge/version-0.1.6--preview.1-12785a?style=flat-square" alt="0.1.6-preview.1" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-5b6470?style=flat-square" alt="AGPL-3.0-or-later" /></a>
 </p>
 
-<h3><a href="https://github.com/Bozheng-Li/Wechat-agent-app/releases/download/v0.1.0-preview.1/Wechat-Agent-App-0.1.0-preview.1-Setup.exe">↓ 下载 Windows 安装包</a></h3>
+<h3><a href="https://github.com/Bozheng-Li/Wechat-agent-app/releases/download/v0.1.6-preview.1/Wechat-Agent-App-0.1.6-preview.1-Setup.exe">↓ 下载 Windows 安装包</a></h3>
 
 <p>
-  <a href="https://github.com/Bozheng-Li/Wechat-agent-app/releases/tag/v0.1.0-preview.1">版本说明</a> ·
+  <a href="https://github.com/Bozheng-Li/Wechat-agent-app/releases/tag/v0.1.6-preview.1">版本说明</a> ·
   <a href="#开始使用">开始使用</a> ·
   <a href="docs/validation.md">验证记录</a> ·
   <a href="https://github.com/Bozheng-Li/Wechat-agent-app/issues">反馈问题</a>
@@ -32,11 +32,13 @@
 
 | 文件 | 用途 | 下载 |
 | --- | --- | --- |
-| **Windows x64 安装包** | 直接安装和使用 | [Wechat-Agent-App-0.1.0-preview.1-Setup.exe](https://github.com/Bozheng-Li/Wechat-agent-app/releases/download/v0.1.0-preview.1/Wechat-Agent-App-0.1.0-preview.1-Setup.exe) |
-| SHA-256 校验文件 | 核对下载文件的完整性 | [Setup.exe.sha256](https://github.com/Bozheng-Li/Wechat-agent-app/releases/download/v0.1.0-preview.1/Wechat-Agent-App-0.1.0-preview.1-Setup.exe.sha256) |
-| 本版本源码 | 阅读代码、修改或自行构建 | [Source code](https://github.com/Bozheng-Li/Wechat-agent-app/archive/refs/tags/v0.1.0-preview.1.zip) |
+| **Windows x64 安装包** | 直接安装和使用 | [Wechat-Agent-App-0.1.6-preview.1-Setup.exe](https://github.com/Bozheng-Li/Wechat-agent-app/releases/download/v0.1.6-preview.1/Wechat-Agent-App-0.1.6-preview.1-Setup.exe) |
+| SHA-256 校验文件 | 核对下载文件的完整性 | [Setup.exe.sha256](https://github.com/Bozheng-Li/Wechat-agent-app/releases/download/v0.1.6-preview.1/Wechat-Agent-App-0.1.6-preview.1-Setup.exe.sha256) |
+| 本版本源码 | 阅读代码、修改或自行构建 | [Source code](https://github.com/Bozheng-Li/Wechat-agent-app/archive/refs/tags/v0.1.6-preview.1.zip) |
 
 > **预览版状态**：桌面界面、真实模型 API、安装、更新与卸载已验证。独立 App 的真实微信扫码登录和在线收发仍待实机验证，详见[验证记录](docs/validation.md)。当前安装包尚未进行代码签名。
+
+> **检查更新**：应用启动后会静默检查新版本，发现更新时在页面顶部提示；也可以打开 **设置 → 版本与更新** 手动检查、下载并安装。更新包从本项目的发布页下载，安装前会核对发布文件里的 SHA-512，覆盖安装后聊天记录、会话授权与模型配置都会保留。预览版不会被 GitHub 的「最新版」入口收录，因此当稳定入口缺少 `latest.yml` 时，应用会改为在发布列表里查找最新的发布文件。
 
 ## 消息、记忆与工作，在同一个地方
 
@@ -46,12 +48,14 @@
 | --- | --- |
 | **自然对话** | 在授权的私聊或群聊中回复，配置助手人设、回复风格、参与频率与活跃时间。 |
 | **长期记忆** | 保存会话上下文与长期记忆，整理人物角色卡，在之后的对话中检索相关信息。 |
-| **图片与素材** | 使用支持图片输入的模型理解图片，管理素材、图片记忆与自己的微信收藏表情。 |
+| **图片与素材** | 使用支持图片输入的模型理解图片，管理素材、图片记忆与自己的微信收藏表情；配置好生图服务后，聊天里也能直接生成图片发出去。 |
 | **朋友圈** | 浏览与整理内容、准备发布素材，配置定时发布、点赞和回复。 |
-| **提醒与任务** | 创建定时提醒、生成群聊简报、安排生图和助手任务，查看执行进度与回执。 |
+| **提醒与任务** | 创建定时提醒与定时消息、生成群聊简报，在朋友圈和素材中安排生图，查看执行结果与回执。 |
 | **模型与诊断** | 配置多个模型 API、图片模型和推理强度，查看任务轨迹、连接状态与应用诊断。 |
 
-搜索和生图服务按需配置。助手任务使用应用提供的记忆、搜索、生图与朋友圈工具。
+搜索和生图服务按需配置。联网搜索可选 **DeepSeek 搜索**（DeepSeek 官方 Anthropic 兼容接口的服务端 web_search，只需 DeepSeek API Key）或 **Tavily 搜索**（填写 Tavily 或兼容服务地址与密钥）。助手回复时可使用应用提供的记忆、搜索、生图与朋友圈工具。
+
+自动功能页把自动回复、定时任务和朋友圈自动功能做成三个独立开关：暂停回复不会取消已安排的定时发送，关闭定时任务也不影响朋友圈按自己的设置运行。
 
 ### 界面预览
 
@@ -123,7 +127,12 @@ flowchart LR
 
 调用在线模型、搜索或生图服务时，应用会发送完成相应任务所需的输入，费用由配置的服务商收取。桌面联网请求跟随 Windows 系统代理。
 
-默认数据目录为 `%APPDATA%\dsh-Wechat-app`，可用 `WECHAT_APP_HOME` 指定启动数据目录，也可在应用设置中迁移业务目录。
+默认数据目录为 `%APPDATA%\dsh-Wechat-app`，可用 `WECHAT_APP_HOME` 指定启动数据目录。**设置 → 存储 → 数据目录** 还可以把桌面版指向 DSH 插件正在用的那个微信 Agent 数据目录（插件把位置记录在 `~/.dsh/wechat-agent/location.json`），两端于是共用同一份账号、配置、记录与记忆：
+
+- **直接使用这个目录**：下次启动改用目标目录，目标里已有的账号与记录继续可用。两端登录的是同一个微信账号时，这就是让两端共用同一份数据的方式；目标属于另一个账号时会再要求确认一次。
+- **复制当前数据过去**：先把当前目录里的数据复制到目标（跳过缓存与实例锁），再切换过去。
+- 同一个数据目录同一时间只能有一个端在运行，另一端会提示“正被另一个实例使用”；切换或复制只在重启后生效，失败时继续使用原来的目录并显示原因。
+- 换电脑时关闭应用、复制整个数据目录，在新机器上选择这个目录即可继续使用。
 
 | 内容 | 存储方式 |
 | --- | --- |
@@ -163,7 +172,7 @@ flowchart LR
 同时下载 `.exe` 和 `.sha256`，在 PowerShell 中执行以下命令，并与校验文件中的值比较：
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\Wechat-Agent-App-0.1.0-preview.1-Setup.exe
+Get-FileHash -Algorithm SHA256 .\Wechat-Agent-App-0.1.6-preview.1-Setup.exe
 ```
 
 SHA-256 用于核对发布文件的完整性，不能替代代码签名。

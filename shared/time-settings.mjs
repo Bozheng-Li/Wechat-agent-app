@@ -18,7 +18,6 @@ export const TIME_FIELDS = {
     number('manualInteractionLookbackDays', '手动朋友圈互动查看最近天数', 0, 30, '0 表示不限时间。'),
   ],
   role: [number('intervalMinutes', '角色卡整理间隔（分钟）', 1, 10080, '选择按时间整理时生效；没有新增消息时跳过。'), number('timeoutMinutes', '角色卡每次整理超时（分钟）', 1, 1440)],
-  work: [number('commandTimeoutSeconds', '工作命令执行超时（秒）', 1, 300)],
   memory: [number('retentionDays', '记忆默认保留天数', 1, 36500, '用于后续新增的会话和长期记忆。')],
   images: [number('retentionDays', '图片记忆保留天数', 1, 36500, '留空表示长期保存。', true)],
   provider: [number('timeoutSeconds', '生图接口调用超时（秒）', 10, 3600, '接口请求与图片下载共用此时限。')],

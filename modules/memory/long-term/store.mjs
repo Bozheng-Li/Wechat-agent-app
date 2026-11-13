@@ -135,6 +135,18 @@ export class LongTermMemory {
     if (messages.length) this.errors.set(accountId, [...new Set(messages)].join('；'));
     else this.errors.delete(accountId);
   }
+  /** 保存模型密钥后，之前“缺少密钥”的失败已经过期，不该继续挂在页面上。 */
+  clearCredentialErrors() {
+    const stale = message => typeof message === 'string' && message.includes('API Key');
+    const touched = new Set();
+    for (const [accountId, message] of [...this.readErrors]) if (stale(message)) { this.readErrors.delete(accountId); touched.add(accountId); }
+    for (const [key, message] of [...this.extractionErrors]) if (stale(message)) {
+      this.extractionErrors.delete(key);
+      touched.add(key.slice(0, key.includes(':') ? key.indexOf(':') : key.length));
+    }
+    for (const accountId of touched) this.refreshError(accountId);
+    return touched.size;
+  }
   account(accountId) {
     if (typeof accountId !== 'string' || !accountId || accountId.length > 200 || /[\s\u0000-\u001f]/.test(accountId))
       throw new ChannelError('LONG_MEMORY_ACCOUNT_MISSING', '请先选择当前微信账号');

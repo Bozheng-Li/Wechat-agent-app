@@ -50,9 +50,9 @@ export const pageLabels = {
   storage: '全局工作目录',
   conversation: '会话设置',
   changelog: '更新日志',
+  updates: '版本与更新',
   memory: '记忆库',
   tasks: '定时任务',
-  work: '工作任务',
   moments: '朋友圈',
   assets: '表情与图片素材',
 };

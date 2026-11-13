@@ -6,7 +6,7 @@
   "npmRebuild": false,
   "electronDist": "node_modules/electron/dist",
   "files": [
-    "package.json", "desktop/main.cjs", "desktop/network.cjs", "desktop/preload.cjs", "desktop/icon.ico",
+    "package.json", "desktop/main.cjs", "desktop/network.cjs", "desktop/preload.cjs", "desktop/updates.cjs", "desktop/icon.ico",
     "lib/app.js", "lib/worker.cjs", "ui/**", "prompts/**", "config.yaml",
     "runtime/**", "LICENSE", "THIRD_PARTY_NOTICES.md", "CHANGELOG.md", "README.md", "docs/**", "licenses/**",
     "!**/__pycache__/**", "!**/*.pyc", "!**/ready.json", "!**/site-packages/bin/**"

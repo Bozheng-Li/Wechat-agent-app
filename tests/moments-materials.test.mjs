@@ -10,10 +10,10 @@ const accountId = 'materials-owner', source = { chatType: 'group', peerId: 'crea
 
 function imageService(f, impl) {
   const calls = [];
-  f.channel.work = { imageGeneration: {
+  f.channel.imageGeneration = {
     catalog: () => ({ enabled: true, defaultProviderId: 'fixture', providers: [{ providerId: 'fixture', name: 'Test image API', models: ['image-test'], defaultModel: 'image-test', size: '1024x1024' }] }),
     generate: async (...args) => { calls.push(args); return impl ? impl(...args) : { bytes: f.png, mediaType: 'image/png', providerId: 'fixture', providerName: 'Test image API', model: 'image-test' }; }
-  } };
+  };
   return calls;
 }
 

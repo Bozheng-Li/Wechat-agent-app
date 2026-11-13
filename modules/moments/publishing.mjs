@@ -4,10 +4,10 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { atomicJson } from '../../backend/storage/atomic-json.ts';
 import { atomicBytes } from '../../backend/storage/atomic-text.mjs';
-import { ChannelError, publicError } from '../../shared/contracts.mjs';
+import { ChannelError, publicError, momentsEnabled } from '../../shared/contracts.mjs';
 import { momentsPublishingSettings, momentsPlanSettings, momentsPlanId, momentsRunId, nextMomentsOccurrence, visibleMomentsText,
   MOMENTS_TEXT_FALLBACK_RESERVE_MS } from '../../shared/moments-publishing.mjs';
-import { workPath } from '../work/policy.mjs';
+import { workPath } from '../paths.mjs';
 import { momentsImage } from './media.mjs';
 import { generateMomentsContent, similarMomentsText } from './publishing-content.mjs';
 import { reviewMaterialText } from './material-privacy.mjs';
@@ -199,7 +199,7 @@ export class MomentsPublishing {
     }
     if (run.settings.image.mode === 'ai') {
       stage('image');
-      const service = this.channel.work?.imageGeneration;
+      const service = this.channel.imageGeneration;
       if (!service?.generate) throw new ChannelError('MOMENTS_IMAGE_UNAVAILABLE', '生图服务未加载，正文已保留但未发布');
       const catalog = service.catalog(), image = run.settings.image, provider = catalog.providers.find(row => row.providerId === (image.providerId || catalog.defaultProviderId));
       if (!provider || !catalog.enabled) throw new ChannelError('MOMENTS_IMAGE_UNAVAILABLE', '所选生图接口未启用或已不存在，正文已保留但未发布');
@@ -387,7 +387,7 @@ export class MomentsPublishing {
     if (typeof accountId !== 'string' || !accountId) return Promise.resolve();
     const account = this.account(accountId);
     this.arrange(accountId);
-    if (!status.online || !status.momentsWriteReady || !this.channel.store.settings(accountId).enabled || !account.settings.enabled) return Promise.resolve();
+    if (!status.online || !status.momentsWriteReady || !momentsEnabled(this.channel.store.settings(accountId)) || !account.settings.enabled) return Promise.resolve();
     const plan = Object.values(this.data.plans).filter(plan => plan.accountId === accountId && !plan.deleted && !plan.automatic?.suppressed && (!plan.automatic || account.settings.automatic.enabled) && plan.settings.enabled && plan.nextRunAt > 0 && plan.nextRunAt <= this.now()).sort((a, b) => a.nextRunAt - b.nextRunAt || Number(!!a.automatic) - Number(!!b.automatic) || a.id.localeCompare(b.id))[0];
     if (!plan) return Promise.resolve();
     const scheduledAt = plan.nextRunAt, id = hash([accountId, plan.id, scheduledAt]), previous = this.data.runs[id];
@@ -402,8 +402,8 @@ export class MomentsPublishing {
     const snapshot = copy(plan), revision = account.revision;
     return this.operation(accountId, plan.id, null, async signal => {
       const check = () => { this.check(accountId, signal); const current = this.data.plans[plan.id];
-        if (this.stopped || !this.channel.store.settings(accountId).enabled || !this.account(accountId).settings.enabled || this.account(accountId).revision !== revision || !current?.settings.enabled || current.deleted || current.automatic?.suppressed || current.automatic && !this.account(accountId).settings.automatic.enabled || current.revision !== snapshot.revision)
-          throw new ChannelError('MOMENTS_PLAN_CHANGED', '自动发布已暂停或计划变化，旧操作未继续'); };
+        if (this.stopped || !momentsEnabled(this.channel.store.settings(accountId)) || !this.account(accountId).settings.enabled || this.account(accountId).revision !== revision || !current?.settings.enabled || current.deleted || current.automatic?.suppressed || current.automatic && !this.account(accountId).settings.automatic.enabled || current.revision !== snapshot.revision)
+          throw new ChannelError('MOMENTS_PLAN_CHANGED', '朋友圈自动功能已关闭或计划变化，旧操作未继续'); };
       const run = { id, accountId, planId: plan.id, requestId: 'moments-scheduled:' + id, inputHash: hash(snapshot.settings), settings: snapshot.settings, scheduledAt, createdAt: this.now(), updatedAt: this.now(), origin: 'schedule', state: 'generating' };
       this.data.runs[id] = run; plan.nextRunAt = nextMomentsOccurrence(snapshot.settings, scheduledAt); plan.waitingReason = null; this.save();
       try { check(); await this.generate(run, signal, check); this.deadline(run); if (!snapshot.settings.reviewRequired) await this.submit(run, signal, check); }

@@ -5,7 +5,7 @@ import { momentsId } from '../../shared/moments.mjs';
 import { isMomentsLikeRequest, isSelfMomentsLikeRequest, momentsLikeRequestArgs } from '../../shared/moments-like-request.mjs';
 import { remoteAuthorized } from '../remote/authorization/policy.mjs';
 import { atomicBytes } from '../../backend/storage/atomic-text.mjs';
-import { workPath } from '../work/policy.mjs';
+import { workPath } from '../paths.mjs';
 import { identity } from '../../backend/storage/keys.mjs';
 import { readMomentsWithMemory } from './read.mjs';
 

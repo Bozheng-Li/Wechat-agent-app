@@ -2,7 +2,7 @@ import { mutationHandlers } from "../rpc/actions.mjs";
 import { resourcePath } from "../platform/resources.mjs";
 import fs from 'node:fs';
 
-import { VERSION, ChannelError, emptySettings, emptyPersona, publicError, workSettings } from "../../shared/contracts.mjs";
+import { VERSION, ChannelError, emptySettings, emptyPersona, publicError } from "../../shared/contracts.mjs";
 
 import { AgentIdentity } from "../../modules/agent/identity.mjs";
 import { readModelInfo } from "../../modules/agent/models.mjs";
@@ -119,13 +119,13 @@ export function createPluginService({
       startupError,
       persona: store?.persona() ?? emptyPersona(),
       modelConfig: store?.modelConfig() ?? { maxTokens: null, temperature: null },
-      capabilities: { vision: ctx?.capabilities?.vision === true, webSearch: ctx?.capabilities?.webSearch === true, nativeWork: false, momentsRead: state.momentsReadReady === true,
+      capabilities: { vision: ctx?.capabilities?.vision === true, webSearch: ctx?.capabilities?.webSearch === true, momentsRead: state.momentsReadReady === true,
         momentsWrite: state.momentsWriteReady === true, momentsAudience: state.momentsAudienceReady === true,
         momentsPublish: { text: state.momentsWriteReady === true, images: state.momentsWriteReady === true, video: false } },
       localPreview: false,
       lastSearch: runner?.searchStatus?.() ?? null,
       search: runner?.search?.status?.() ?? { credentialStore: false, credentials: { dsh: false, tavily: false } },
-      imageGeneration: channel?.work?.imageGeneration?.status() ?? { ...imageGenerationSettings(), credentialStore: false, credentialConfigured: false },
+      imageGeneration: channel?.imageGeneration?.status() ?? { ...imageGenerationSettings(), credentialStore: false, credentialConfigured: false },
       memory: { windowChars: channel?.memory?.index.windowChars ?? 100000, path: channel?.memory?.root || null },
       timeSettings: timeSettings(store?.config?.section('timeSettings')),
       scheduler: { enabled: !!scheduler && !scheduler.stopped, error: scheduler?.error || null },
@@ -201,6 +201,7 @@ export function createPluginService({
   };
   return {
     drain: () => Promise.allSettled([mutations, ...featureOperations]),
+    clearCredentialErrors() { return channel?.longMemory?.clearCredentialErrors?.() ?? 0; },
     replaceRuntime(next) {
       ({ root, store, worker, runner, channel, scheduler, identity } = next);
       cleanup = new OwnerCleanup(channel, scheduler);
@@ -424,26 +425,8 @@ export function createPluginService({
         };
       }
       if (endpoint === 'memory.get') return channel.memory.view(conversation(payload));
-      if (endpoint === 'memory.images.list') {
-        const scope = { ...conversation(payload), collection: imageMemoryCollection(payload.collection) };
-        if (scope.collection === 'generated') {
-          const settings = store.settings(scope.accountId), allowed = scope.chatType === 'group' ? settings.groups : settings.privatePeers;
-          if (allowed.includes(scope.peerId)) {
-            const combined = AbortSignal.any([lifetime, ...(signal ? [signal] : [])]),
-              check = () => {
-                assertLive(combined); currentAccount(payload);
-                const current = store.settings(scope.accountId);
-                if (!(scope.chatType === 'group' ? current.groups : current.privatePeers).includes(scope.peerId))
-                  throw new ChannelError('AUTH_CHANGED', '会话授权已撤销，已停止补入生成图片');
-              },
-              pending = channel.work.generatedImages.sync(scope, combined, check);
-            featureOperations.add(pending);
-            return pending.then(() => { check(); return channel.imageMemory.list(scope, payload); })
-              .finally(() => featureOperations.delete(pending));
-          }
-        }
-        return channel.imageMemory.list(scope, payload);
-      }
+      if (endpoint === 'memory.images.list')
+        return channel.imageMemory.list({ ...conversation(payload), collection: imageMemoryCollection(payload.collection) }, payload);
       if (endpoint === 'memory.images.content')
         return channel.imageMemory.content({ ...conversation(payload), collection: imageMemoryCollection(payload.collection) }, payload.imageId, {
           preview: payload.preview === true,
@@ -464,9 +447,7 @@ export function createPluginService({
           ...channel.memory.load(scope).entries,
           ...store.history(scope.accountId, scope.chatType, scope.peerId, 1000),
         ];
-        const pending = scope.collection === 'generated'
-          ? channel.work.generatedImages.sync(scope, combined, assertAllowed)
-          : channel.imageMemory.importExisting(scope, entries, worker, combined, assertAllowed);
+        const pending = channel.imageMemory.importExisting(scope, entries, worker, combined, assertAllowed);
         featureOperations.add(pending);
         void pending.finally(() => featureOperations.delete(pending)).catch(() => {});
         return pending;
@@ -510,22 +491,6 @@ export function createPluginService({
         const account = currentAccount(payload),
           selector = payload.peerId ? conversation(payload) : undefined;
         return scheduler?.list(account.id, selector) ?? { tasks: [], runs: [], error: '定时任务组件尚未启动' };
-      }
-      if (['work.list', 'work.get', 'work.cancel', 'work.configure'].includes(endpoint)) {
-        const account = currentAccount(payload);
-        if (endpoint === 'work.configure') {
-          assertLive(signal);
-          if (!Number.isInteger(payload.maxConcurrent)) throw new ChannelError('INVALID_WORK_SETTINGS', '请选择 1–8 个同时执行任务');
-          const next = store.config.snapshot(store.data);
-          next.work = workSettings({ ...next.work, maxConcurrent: payload.maxConcurrent });
-          store.config.commit(next);
-          channel.work.drain();
-          return channel.work.capacity();
-        }
-        const scope = payload.peerId ? conversation(payload) : { accountId: account.id };
-        if (endpoint === 'work.list') return channel.work.list(scope);
-        if (endpoint === 'work.get') return channel.work.get(payload.id, scope);
-        return channel.work.cancel(payload.id, scope);
       }
       if (endpoint === 'records.list') {
         conversation(payload);

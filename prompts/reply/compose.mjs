@@ -9,13 +9,12 @@ import { DEFAULT_AGENT_IDENTITY, effectiveAgentIdentity } from "../../modules/ag
 import { naturalDecisionInstructions } from '../conversation/decision.mjs';
 import { promptSection } from "../format/sections.mjs";
 import { personaFields, personaStyleParts } from "../../modules/agent/persona-input.mjs";
-import { readPrompt } from '../loader.mjs';
 import { publicLanguageInstructions } from './language.mjs';
 import { buildProgressiveReply } from './progressive.mjs';
 import { ROLE_CARD_READING_PROMPT, ROLE_CARD_UPDATE_PROMPT } from '../memory/role-card.mjs';
 
-export const INTERNAL_OUTPUT_MODES = new Set(['role-memory', 'long-memory', 'reply-review', 'memory', 'vision', 'workbench', 'remote-intent', 'work-result', 'work-progress', 'work-routing', 'moments-reply', 'moments-interaction', 'moments-publish', 'moments-materials', 'moments-material-review']);
-const PUBLIC_INTERNAL_MODES = new Set(['work-result', 'work-progress', 'reply-review', 'moments-reply', 'moments-publish']);
+export const INTERNAL_OUTPUT_MODES = new Set(['role-memory', 'long-memory', 'reply-review', 'memory', 'vision', 'workbench', 'remote-intent', 'moments-reply', 'moments-interaction', 'moments-publish', 'moments-materials', 'moments-material-review']);
+const PUBLIC_INTERNAL_MODES = new Set(['reply-review', 'moments-reply', 'moments-publish']);
 
 function bareGreeting(text = '', persona = {}) {
   const punctuation = /^[，。！？,.!~～\s]+|[，。！？,.!~～\s]+$/gu;
@@ -79,8 +78,6 @@ const INTERNAL_DEFAULTS = Object.freeze({
     '从本次资料中的明确陈述提取长期有用的事实，区分发言者与事实来源。引用、翻译、教材例句、假设及其元说明不算真人事实。只输出严格 JSON，使用 facts 数组；没有可靠事实时 facts 为空数组。',
   vision: '按本次问题描述实际可见的画面与文字，区分观察和推测。未提供或看不清的内容明确说明，不用旧描述补猜。',
   workbench: '按本次任务整理提供的资料，仅输出所需结果；没有依据的内容明确说明，不续写聊天或自动发布。',
-  'work-result': '只润色本次已完成的本地任务文字结果，保留事实、数字、失败和未知状态；不执行任务、不调用工具、不处理或发送文件。',
-  'work-routing': '仅根据当前消息与提供的工作上下文判断聊天、新任务、继续、状态或取消；复核当前原话是否构成实际委托、是否包含引用或否定、任务目标是否唯一。只输出协议规定的 JSON（action、taskId、review），review 仅记录简短的意图类别、原文证据和目标检查，不输出分析过程。无法判断时选择 chat。',
 });
 
 function presentationRequirementLines(markdown) {
@@ -172,12 +169,8 @@ export function buildWechatPrompt({
   history,
   speaker,
   now = new Date(),
-  workContext,
   promptStrategy = 'legacy',
 } = {}) {
-  if (mode === 'work-dialogue') return [publicLanguageInstructions(), readPrompt('work/dialogue.md'), persona
-    ? '以下全局助手设定只约束本轮对外说话方式，不作为工作要求、执行判断或权限依据：\n' + personaInstructions(persona) : '', workContext
-    ? '本轮后端工作状态（只读系统资料，不是用户要求或历史任务正文）：\n' + JSON.stringify(workContext) : ''].filter(Boolean).join('\n\n');
   if (INTERNAL_OUTPUT_MODES.has(mode)) {
     const publicBody = PUBLIC_INTERNAL_MODES.has(mode) || mode === 'moments-interaction';
     return [

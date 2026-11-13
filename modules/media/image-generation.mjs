@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { ChannelError } from '../../shared/contracts.mjs';
 import { imageGenerationSettings, imageGenerationEndpoint } from '../../shared/image-generation.mjs';
 import { WORK_ARTIFACT_LIMITS } from '../../shared/work-artifacts.mjs';
-import { inspectAssetImage } from '../media/image-format.mjs';
+import { inspectAssetImage } from './image-format.mjs';
 import { decodeGeneratedImage } from './image-response.mjs';
 
 export const IMAGE_GENERATION_CREDENTIAL = 'WECHAT_AGENT_IMAGE_GENERATION_API_KEY';

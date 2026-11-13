@@ -1,14 +1,11 @@
 import { promptText } from "../../prompts/loader.mjs";
-import { ChannelError, eligible, messageText, nicknameMentioned, publicError } from "../../shared/contracts.mjs";
+import { ChannelError, eligible, messageText } from "../../shared/contracts.mjs";
 import { identity } from "../../backend/storage/keys.mjs";
 import { randomUUID } from 'node:crypto';
 import { NATURAL_REASONS } from "./natural-chat.mjs";
 import { matches } from "./helpers.mjs";
 import { remoteCommand } from '../remote/commands/index.mjs';
 import { naturalRemoteRequest } from '../remote/intent/index.mjs';
-import { workCommand } from '../work/commands.mjs';
-import { executionModeCommand } from '../work/modes/commands.mjs';
-import { workAdministrator } from '../work/policy.mjs';
 import { unavailableMessage } from '../../shared/message-content.mjs';
 import { conversationAuthorized } from '../../shared/authorization.mjs';
 
@@ -42,10 +39,7 @@ export function receiveMessage(channel, message, accountId) {
       return;
     }
     const config = channel.store.conversationSettings(account.id, message.chatType, message.peerId);
-    const chatInWorkMode = config.executionMode === 'work' && !workAdministrator(channel.store, {
-      accountId: account.id, chatType: message.chatType, peerId: message.peerId, senderId: message.sender.id,
-    });
-    const mode = chatInWorkMode ? 'nickname' : message.chatType === 'group' ? config.mode : 'default';
+    const mode = message.chatType === 'group' ? config.mode : 'default';
     const persona = channel.store.conversationPersona(account.id, message.chatType, message.peerId);
     const contextKey = identity([
       account.id,
@@ -79,10 +73,6 @@ export function receiveMessage(channel, message, accountId) {
       channel.store.remember(key, channel.now(), { ...record, state: 'skipped', reason: boundaryReason });
       return;
     }
-    if (config.executionMode === 'work' && [10000, 10002].includes(message.messageType)) {
-      channel.store.remember(key, channel.now(), { ...record, state: 'skipped', reason: '工作模式不回复系统消息' });
-      return;
-    }
     const observation = { accountId: account.id, message };
     if (unavailableMessage(message)) {
       channel.store.remember(key, channel.now(), { ...record, state: 'skipped', contentUnavailable: true,
@@ -96,65 +86,9 @@ export function receiveMessage(channel, message, accountId) {
     }
     const parsed = messageText(message, account, { mode, persona });
     const requestedText = parsed.text ?? message.message?.filter(segment => segment.type === 'text').map(segment => segment.data?.text ?? '').join('').trim();
-    if (!chatInWorkMode && config.executionMode === 'work' && message.chatType === 'group' &&
-        mode === 'nickname' && parsed.reason && !/^\/mode(?:\s|$)/i.test(requestedText ?? '')) {
-      channel.store.remember(key, channel.now(), { ...record, question: requestedText, state: 'skipped',
-        reason: parsed.reason }, observation);
-      return;
-    }
-    if (chatInWorkMode && !nicknameMentioned(requestedText ?? '', [persona.name, ...persona.aliases, account.nickname])) {
-      channel.store.remember(key, channel.now(), { ...record, question: requestedText, state: 'skipped',
-        reason: '当前仅管理员进入工作模式，其他成员需呼叫 Agent 名字或唤醒别名后聊天' }, observation);
-      return;
-    }
-    const control = chatInWorkMode ? null : executionModeCommand(requestedText, [persona.name, ...persona.aliases, account.nickname]);
-    if (control && ![10000, 10002].includes(message.messageType)) {
-      record.question = requestedText;
-      record.mode = 'mode-control';
-      record.modeControl = control.action;
-      delete record.agentName;
-      record.contextKey = identity([account.id, message.chatType, message.peerId, 'mode-control', message.sender.id]);
-      channel.store.remember(key, channel.now(), record);
-      let modeResult, modeControlAuthorized = false;
-      try {
-        modeResult = channel.modes.handle(control, record);
-        modeControlAuthorized = true;
-      } catch (error) {
-        if (['STATE_WRITE_FAILED', 'CONFIG_CHANGED'].includes(error?.code)) throw error;
-        modeResult = publicError(error, '模式未切换，请检查管理员和会话授权').message;
-      }
-      channel.pushDirect({ record, message, mode: 'mode-control', config: channel.store.conversationSettings(account.id, message.chatType, message.peerId),
-        text: requestedText, modeControl: control, modeResult, modeControlAuthorized });
-      channel.drain();
-      return;
-    }
-    // Work-mode text uses the model's registered tools, including explicit
-    // task and status commands. Chat-mode remote commands keep their route.
-    const explicitWork = chatInWorkMode ? null : workCommand(requestedText, 'chat');
-    const remote = chatInWorkMode || explicitWork || config.executionMode === 'work' ? null : remoteCommand(requestedText) ?? naturalRemoteRequest(requestedText);
-    const work = chatInWorkMode ? null : explicitWork ??
-      (!requestedText && config.executionMode === 'work' ? { action: 'input-required' } : null);
-    const workRouting = config.executionMode === 'work' && !chatInWorkMode && !work && !!requestedText;
-    if (workRouting) {
-      record.question = requestedText;
-      record.mode = 'work-routing';
-      record.contextKey = identity([account.id, message.chatType, message.peerId, 'work-request', message.sender.id]);
-      channel.store.remember(key, channel.now(), record);
-      channel.pushWork({ record, message, mode: 'default', config, text: requestedText, prompt: settings.prompt,
-        workRouting: true, workForAdministrator: true });
-      return;
-    }
-    if (work && ![10000, 10002].includes(message.messageType)) {
-      record.question = requestedText;
-      record.mode = 'work';
-      record.workRequest = work.action;
-      delete record.agentName;
-      record.contextKey = identity([account.id, message.chatType, message.peerId, 'work-request', message.sender.id]);
-      channel.store.remember(key, channel.now(), record);
-      channel.pushWork({ record, message, mode: 'work', config, text: requestedText, workCommand: work,
-        workExplicit: !!explicitWork, workNatural: config.executionMode === 'work', workForAdministrator: config.executionMode === 'work' });
-      return;
-    }
+    // Remote administrator queries keep their own route so their status data
+    // never enters ordinary chat history or model memory.
+    const remote = remoteCommand(requestedText) ?? naturalRemoteRequest(requestedText);
     if (remote && ![10000, 10002].includes(message.messageType)) {
       record.question = requestedText;
       record.mode = 'default';
@@ -165,11 +99,6 @@ export function receiveMessage(channel, message, accountId) {
       channel.store.remember(key, channel.now(), record);
       channel.pushDirect({ record, message, mode: 'default', config, text: requestedText, remoteCommand: remote });
       channel.drain();
-      return;
-    }
-    if (config.executionMode === 'work' && !chatInWorkMode) {
-      channel.store.remember(key, channel.now(), { ...record, state: 'skipped',
-        reason: '工作模式不执行系统消息，也不触发聊天回复' });
       return;
     }
     if (mode === 'natural' && [10000, 10002].includes(message.messageType)) {
@@ -306,7 +235,6 @@ export function receiveMessage(channel, message, accountId) {
       config,
       text: parsed.text,
       prompt: settings.prompt,
-      chatInWorkMode,
       naturalDirect: mode === 'natural',
       memorySnapshot: channel.memory.snapshot(record, key),
     });
@@ -340,7 +268,7 @@ export function observeManualReply(channel, message, accountId) {
       return;
     const config = channel.store.conversationSettings(accountId, message.chatType, message.peerId);
     if (
-      config.mode !== 'natural' || config.executionMode === 'work' ||
+      config.mode !== 'natural' ||
       channel.store.data.records.some(
         (record) =>
           record.accountId === accountId &&
@@ -365,8 +293,7 @@ export function enqueueNaturalReply(
   channel,
   { selector, config, state, trigger, record, message, text, target, observation }
 ) {
-  if (channel.closed || channel.fault || config.executionMode === 'work' ||
-      channel.store.conversationSettings(selector.accountId, selector.chatType, selector.peerId).executionMode === 'work') return;
+  if (channel.closed || channel.fault) return;
   const ambient = trigger !== 'followup';
   const existing =
     ambient &&

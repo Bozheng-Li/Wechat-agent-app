@@ -303,3 +303,16 @@ for (const action of ['cancel', 'revoke']) test(`${action} while an image is bei
   assert.equal(f.sent.length, 0); assert.equal(f.record(task.id).state, 'cancelled');
   await f.scheduler.tick(); assert.equal(f.sent.length, 0);
 });
+
+test('定时任务开关独立控制计划发送，与自动回复开关互不牵连', async t => {
+  const f = await fixture(t), task = f.create('message', '提醒阿禾吃饭');
+  f.store.configure(owner, { ...f.settings, enabled: false, schedules: true, moments: false });
+  f.advance(1000); await f.scheduler.tick();
+  assert.equal(f.sent.length, 1, '回复开关关闭时定时任务仍按自己的开关执行: ' + JSON.stringify(f.task(task.id)));
+  const blocked = f.create('message', '第二条提醒');
+  f.store.configure(owner, { ...f.settings, enabled: true, schedules: false, moments: true });
+  f.advance(1000); await f.scheduler.tick();
+  assert.equal(f.sent.length, 1, '定时任务关闭时不发送');
+  assert.equal(f.task(blocked.id).state, 'pending');
+  assert(f.task(task.id));
+});

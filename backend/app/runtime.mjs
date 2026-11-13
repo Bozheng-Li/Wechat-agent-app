@@ -74,10 +74,8 @@ export class WechatRuntime {
     await this.servicesReady;
     await this.channel.authorization.whenIdle().catch(() => {});
     this.signal.throwIfAborted();
-    await this.channel.work.prepareProjects(this.signal);
-    this.signal.throwIfAborted();
     await this.runner.search.refreshCredentials();
-    await this.channel.work.imageGeneration.refreshCredential();
+    await this.channel.imageGeneration.refreshCredential();
     this.signal.throwIfAborted();
     return this;
   }

@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import {
   ChannelError, StateStore, WechatChannel, DshAgentRunner, WorkerClient,
   completedText, messageText, validateSettings, acquireLock, rpcHandler,
-  validateModelChoice, availableModel, selectModel, publicError
+  validateModelChoice, availableModel, selectModel, publicError, schedulesEnabled, momentsEnabled
 } from '../lib/testing.js';
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -41,6 +41,22 @@ test('settings validate account-bound private/group ID types without enabling de
   assert.throws(() => validateSettings({ ...settings, enabled: 'yes' }), /格式/);
   assert.throws(() => validateSettings({ ...settings, groups: ['alice'] }), /群 ID/);
   assert.throws(() => validateSettings({ ...settings, privatePeers: ['123@chatroom'] }), /私聊 ID/);
+});
+
+test('自动功能开关分别保存，缺省时继续跟随原来的总开关', () => {
+  const legacy = { enabled: true, privatePeers: ['alice'], groups: ['a@chatroom'], prompt: '' };
+  assert.deepEqual(validateSettings({ ...legacy, schedules: false, moments: true }),
+    { ...legacy, schedules: false, moments: true });
+  assert.equal(Object.hasOwn(validateSettings(legacy), 'schedules'), false);
+  assert.equal(validateSettings(legacy).enabled, true);
+  assert.equal(schedulesEnabled(legacy), true);
+  assert.equal(momentsEnabled(legacy), true);
+  assert.equal(schedulesEnabled({ ...legacy, schedules: false }), false);
+  assert.equal(momentsEnabled({ ...legacy, enabled: false }), false);
+  assert.equal(schedulesEnabled({ ...legacy, enabled: false, schedules: true }), true);
+  assert.equal(momentsEnabled({ ...legacy, enabled: false, moments: true }), true);
+  for (const value of ['yes', 1, null])
+    assert.throws(() => validateSettings({ ...legacy, schedules: value }), error => error.code === 'INVALID_SETTINGS');
 });
 
 test('group triggers require native mention of this account or explicit command', () => {

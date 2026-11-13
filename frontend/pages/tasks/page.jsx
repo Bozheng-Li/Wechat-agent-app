@@ -389,7 +389,8 @@ export function TasksPage({ rpc, status, rows, initialPeer }) {
                           </span>
                           <time>{formatTime(task.nextRunAt)}</time>
                           <ScheduleCountdown at={Math.max(task.nextRunAt, task.retryAt || 0)} running={task.state === 'running'}
-                            paused={taskPaused(task)} status={status} action={task.retryAt > task.nextRunAt ? '重试' : '执行'} />
+                            paused={taskPaused(task) || (status.settings?.schedules === false && '定时任务已关闭')}
+                            status={status} action={task.retryAt > task.nextRunAt ? '重试' : '执行'} />
                         </div>
                         <TaskBadge state={task.state} />
                         <div className="wa-task-actions">

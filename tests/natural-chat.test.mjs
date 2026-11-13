@@ -57,24 +57,6 @@ function fixture(t, options = {}) {
   return { root, store, channel, transport, runner, status, calls, sent, outputs, clock, config, message, receive, records, state, advance, gates };
 }
 
-test('work mode disables natural timers, stale enqueue and chat generation while other groups remain available', async t => {
-  const f = fixture(t), before = f.store.conversationSettings(owner.id, 'group', room);
-  f.config(room, { executionMode: 'work' });
-  await f.advance(6 * 60000);
-  assert.equal(f.calls.length, 0); assert.equal(f.channel.queue.length, 0);
-  f.channel.enqueueNatural({ selector: { accountId: owner.id, chatType: 'group', peerId: room }, config: before,
-    state: f.state(), trigger: 'timer' });
-  assert.equal(f.channel.queue.length, 0);
-  const message = f.message('旧聊天任务');
-  const record = { key: 'old-chat', accountId: owner.id, chatType: 'group', peerId: room, senderId: 'alice', createdAt: f.clock.value };
-  assert.throws(() => f.channel.assertAllowed({ record, message, config: f.store.conversationSettings(owner.id, 'group', room) }), /工作模式/);
-  f.config(otherRoom);
-  f.channel.natural.tick();
-  await f.advance(6 * 60000);
-  assert.equal(f.calls.length, 1);
-  assert.equal(f.store.recordsPage(owner.id, { chatType: 'group', peerId: otherRoom }).records.length, 1);
-});
-
 test('natural settings validate defaults, all numeric boundaries and overnight hours without changing legacy modes', () => {
   assert.deepEqual(validateNaturalSettings(), emptyNaturalSettings());
   for (const value of [{ minMinutes: 0 }, { maxMinutes: 1441 }, { minMinutes: 60, maxMinutes: 30 }, { fixedMinutes: 1.5 },

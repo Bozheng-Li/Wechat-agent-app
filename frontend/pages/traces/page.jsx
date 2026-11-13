@@ -8,7 +8,7 @@ import { TraceDetail, TraceBadge, traceTime } from './detail.jsx';
 import { TraceNetworkMark } from './graph-node.jsx';
 
 const dateInput = date => [date.getFullYear(), String(date.getMonth() + 1).padStart(2, '0'), String(date.getDate()).padStart(2, '0')].join('-');
-const categoryIcons = { all: 'grid', conversation: 'chat', work: 'work', scheduled: 'clock', moments: 'moments', memory: 'memory', media: 'image', digest: 'digest', maintenance: 'shield' };
+const categoryIcons = { all: 'grid', conversation: 'chat', scheduled: 'clock', moments: 'moments', memory: 'memory', media: 'image', digest: 'digest', maintenance: 'shield' };
 export function ExecutionTracesPage({ rpc, status }) {
   const accountId = status.account?.id, rpcRef = useRef(rpc); rpcRef.current = rpc;
   const [type, setType] = useState('all'), [state, setState] = useState('all'), [query, setQuery] = useState('');

@@ -45,7 +45,7 @@ function parseCalls(values, inventory, seen) {
 export async function runLocalAgent(runner, {
   text, group, prompt, persona, adminNotes, sessionId, signal = new AbortController().signal, onSession,
   mode = 'default', history = [], memory, images = [], tools = [], systemOverride, speaker, account,
-  allowEmptyReply = false, executionSnapshot, selectReplyText, naturalDecision, scheduledTask, workContext,
+  allowEmptyReply = false, executionSnapshot, selectReplyText, naturalDecision, scheduledTask,
   onRequestMetrics, onBeforeTool, assertAllowed = () => {},
 }) {
   signal.throwIfAborted(); assertAllowed();
@@ -56,10 +56,10 @@ export async function runLocalAgent(runner, {
   let selected = await availableModel(runner.ctx, structuredClone(executionSnapshot?.selection ?? runner.selection()), signal);
   if (images.length) selected = await visionSelection(runner.ctx, selected, runtime.modelConfig?.visionModel, signal);
   const id = sessionId || randomUUID(), requestMetrics = [], trace = currentTrace();
-  const internal = INTERNAL_OUTPUT_MODES.has(mode), workDialogue = mode === 'work-dialogue', localWork = mode === 'local-work';
+  const internal = INTERNAL_OUTPUT_MODES.has(mode);
   const material = ['moments-materials', 'moments-publish'].includes(mode);
   const person = mode === 'natural' && naturalDecision || ['moments-reply', 'moments-interaction'].includes(mode);
-  const definitions = workDialogue || localWork ? [...tools] : material
+  const definitions = material
     ? tools.filter(tool => ['wechat_moments_material_search', 'wechat_moments_material_download', 'wechat_moments_material_generate'].includes(tool.name))
     : person ? tools.filter(tool => tool.name === 'wechat_role_card') : internal || systemOverride ? []
     : [...tools, ...(runtime.modelConfig?.webSearch ? [runner.searchTool(runtime.modelConfig, { assertAllowed })] : [])];
@@ -68,8 +68,8 @@ export async function runLocalAgent(runner, {
   const system = buildWechatPrompt({ group, mode, persona: runtime.persona, prompt, adminNotes, identityMarkdown: runtime.identityMarkdown,
     modelConfig: runtime.modelConfig, promptStrategy: strategy, capabilities: registered.visible,
     searchAvailable: definitions.some(tool => tool.name === 'wechat_web_search'), memoryAvailable: definitions.some(tool => tool.name === 'wechat_memory'),
-    systemOverride, naturalDecision, requestText: text, history, speaker, workContext }) + '\n\n' + registered.sections.join('\n');
-  const inputText = workDialogue || mode === 'work-routing' ? text : [identityData(speaker, account, runtime.persona), scheduledData(scheduledTask, mode),
+    systemOverride, naturalDecision, requestText: text, history, speaker }) + '\n\n' + registered.sections.join('\n');
+  const inputText = [identityData(speaker, account, runtime.persona), scheduledData(scheduledTask, mode),
     memoryContext(memory), messageWithHistory(text, history, mode, undefined)].filter(Boolean).join('\n\n');
   const messages = [{ role: 'system', content: system }, { role: 'user', content: images.length
     ? [{ type: 'text', text: inputText }, ...images.map(imageContent)] : inputText }];
@@ -126,7 +126,7 @@ export async function runLocalAgent(runner, {
       throw new ChannelError('MODEL_EMPTY', '模型没有返回可用的最终正文，未发送微信回复');
     }
     let replyStyleWarning;
-    if (!internal && !workDialogue && !localWork && (!systemOverride || mode === 'confirmation') && reply)
+    if (!internal && (!systemOverride || mode === 'confirmation') && reply)
       reply = await runner.polishReply(reply, text, signal, runtime.persona, { prompt, runtime, onStyleWarning: note => { replyStyleWarning = note; } });
     return { text: reply, sessionId: id, requestMetrics, ...(emptyResponseRetries ? { emptyResponseRetries } : {}), ...(replyStyleWarning ? { replyStyleWarning } : {}) };
   }

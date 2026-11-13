@@ -1,6 +1,11 @@
 const { app, BrowserWindow, ipcMain, Menu, Tray, nativeImage, safeStorage, shell, dialog } = require('electron');
 const path = require('node:path');
+const fs = require('node:fs');
 const { pathToFileURL } = require('node:url');
+const { createUpdater } = require('./updates.cjs');
+// app.getVersion() reports Electron's own version when the entry is a script
+// file (tests, npm start), so the release version comes from the package itself.
+const { version: PACKAGE_VERSION } = require('../package.json');
 
 async function runDesktop({ dataHome = process.env.WECHAT_APP_HOME, show = true } = {}) {
   // Electron keys its instance lock by userData. Claim the same per-user lock
@@ -8,7 +13,22 @@ async function runDesktop({ dataHome = process.env.WECHAT_APP_HOME, show = true 
   const singletonHome = path.join(app.getPath('appData'), 'dsh-Wechat-app');
   app.setPath('userData', singletonHome);
   if (!app.requestSingleInstanceLock()) { app.quit(); return null; }
-  app.setPath('userData', dataHome ? path.resolve(dataHome) : singletonHome);
+  // The bundle owns the storage helpers, so the packaged app never reaches into
+  // source folders that are not shipped.
+  const { createDesktopApplication, resolveDataRoot, lockHolder } = await import('../lib/app.js');
+  // The data root is settled before any store opens: an explicit home wins, then
+  // a pointer that both ends share, then the per-user default. A pending switch
+  // (copy or adopt another root) runs here so nothing is copied while in use.
+  const data = dataHome ? { root: path.resolve(dataHome), source: 'argument' } : resolveDataRoot(singletonHome);
+  // One data root has one writer. A live lock means the other end (the DSH plugin
+  // or another window) is using it, so report it instead of opening stores that
+  // cannot commit.
+  const root = data.root;
+  const holder = process.env.WECHAT_APP_IGNORE_LOCK === '1' ? undefined : lockHolder(root);
+  if (holder) console.error('数据目录正被其他实例使用（pid ' + (holder.pid ?? holder.workerPid) + '）：' + root);
+  app.setPath('userData', root);
+  if (data.source === 'failed') console.error('数据目录切换未完成：' + data.error);
+  const dshHome = process.env.DSH_HOME || path.join(require('node:os').homedir(), '.dsh');
   let window, tray, quitting = false, stopping, showRequested = show;
   const showWindow = () => {
     if (quitting) return;
@@ -20,8 +40,7 @@ async function runDesktop({ dataHome = process.env.WECHAT_APP_HOME, show = true 
   app.on('second-instance', showWindow);
   await app.whenReady();
   require('./network.cjs').installNetworkFetch();
-  const { createDesktopApplication } = await import('../lib/app.js');
-  const application = await createDesktopApplication({ dataHome: app.getPath('userData'), encryption: {
+  const application = await createDesktopApplication({ dataHome: app.getPath('userData'), home: singletonHome, dshHome, encryption: {
     isAvailable: () => safeStorage.isEncryptionAvailable(), encrypt: value => safeStorage.encryptString(value), decrypt: value => safeStorage.decryptString(value),
   } });
   const page = pathToFileURL(path.join(__dirname, '../ui/index.html')).href;
@@ -50,6 +69,50 @@ async function runDesktop({ dataHome = process.env.WECHAT_APP_HOME, show = true 
     if (typeof address !== 'string' || address.length > 8192 || !['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('网页链接无效');
     await shell.openExternal(url.href);
   });
+  // The renderer only ever receives a path the person picked in their own dialog.
+  ipcMain.handle('wechat-app:pick-directory', async (event, current) => {
+    owner(event);
+    const options = { title: '选择全局工作目录', buttonLabel: '使用此目录',
+      properties: ['openDirectory', 'createDirectory', 'promptToCreate', 'dontAddToRecent'] };
+    if (typeof current === 'string' && path.isAbsolute(current) && fs.existsSync(current)) options.defaultPath = current;
+    const result = await dialog.showOpenDialog(window, options);
+    return result.canceled ? null : result.filePaths[0] || null;
+  });
+  ipcMain.handle('wechat-app:open-path', async (event, target) => {
+    owner(event);
+    if (typeof target !== 'string' || target.length > 32767 || !path.isAbsolute(target)) throw new Error('目录无效');
+    let stat;
+    try { stat = await fs.promises.stat(target); } catch { throw new Error('目录不存在'); }
+    if (!stat.isDirectory()) throw new Error('只能打开目录');
+    const error = await shell.openPath(target);
+    if (error) throw new Error(error);
+  });
+  // Update checks and installer downloads stay in the main process; the renderer
+  // has no network access and never receives the installer bytes.
+  const updater = createUpdater({ currentVersion: PACKAGE_VERSION, directory: app.getPath('userData') });
+  const settle = operation => operation.then(value => ({ ok: true, value }),
+    error => ({ ok: false, error: { code: error.code || 'UPDATE_FAILED', message: error.message || '更新操作未完成' } }));
+  ipcMain.handle('wechat-app:update-check', async event => { owner(event); return settle(updater.check()); });
+  ipcMain.handle('wechat-app:update-download', async event => {
+    owner(event);
+    return settle(updater.download(progress => {
+      if (!window.isDestroyed()) window.webContents.send('wechat-app:update-progress', progress);
+    }));
+  });
+  ipcMain.handle('wechat-app:update-cancel', async event => { owner(event); return { ok: true, value: updater.cancel() }; });
+  ipcMain.handle('wechat-app:update-install', async event => {
+    owner(event);
+    const outcome = await settle(Promise.resolve().then(() => updater.install()));
+    if (outcome.ok) setTimeout(() => app.quit(), 1200);
+    return outcome;
+  });
+  // A data-root switch is applied on the next start, so the window asks for a
+  // restart instead of re-pointing a live store.
+  ipcMain.handle('wechat-app:relaunch', async event => {
+    owner(event);
+    setTimeout(() => { app.relaunch(); app.quit(); }, 150);
+    return { ok: true, value: { restarting: true } };
+  });
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', (event, url) => { if (url !== page) event.preventDefault(); });
   window.webContents.on('will-attach-webview', event => event.preventDefault());
@@ -68,7 +131,12 @@ async function runDesktop({ dataHome = process.env.WECHAT_APP_HOME, show = true 
   const stop = () => stopping ??= (async () => {
     quitting = true; for (const controller of active.values()) controller.abort();
     await application.close(); tray?.destroy();
-    ipcMain.removeHandler('wechat-app:rpc'); ipcMain.removeHandler('wechat-app:external'); ipcMain.removeAllListeners('wechat-app:cancel');
+    ipcMain.removeHandler('wechat-app:rpc'); ipcMain.removeHandler('wechat-app:external');
+    ipcMain.removeHandler('wechat-app:pick-directory'); ipcMain.removeHandler('wechat-app:open-path');
+    ipcMain.removeHandler('wechat-app:update-check'); ipcMain.removeHandler('wechat-app:update-download');
+    ipcMain.removeHandler('wechat-app:update-cancel'); ipcMain.removeHandler('wechat-app:update-install');
+    ipcMain.removeHandler('wechat-app:relaunch');
+    ipcMain.removeAllListeners('wechat-app:cancel');
     if (!window.isDestroyed()) window.destroy();
   })();
   app.on('before-quit', event => {
@@ -77,7 +145,7 @@ async function runDesktop({ dataHome = process.env.WECHAT_APP_HOME, show = true 
   });
   await window.loadURL(page);
   if (showRequested) showWindow();
-  return { window, application, stop, dataHome: app.getPath('userData') };
+  return { window, application, stop, updater, dataHome: app.getPath('userData') };
 }
 
 module.exports = { runDesktop };

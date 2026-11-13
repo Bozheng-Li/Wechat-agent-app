@@ -9,7 +9,7 @@ import { momentsId } from '../../shared/moments.mjs';
 import { personAuthorized } from '../../shared/authorization.mjs';
 import { identity } from '../../backend/storage/keys.mjs';
 import { atomicBytes } from '../../backend/storage/atomic-text.mjs';
-import { workPath } from '../work/policy.mjs';
+import { workPath } from '../paths.mjs';
 
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const fail = message => { throw new ChannelError('MOMENTS_STATE_INVALID', message); };

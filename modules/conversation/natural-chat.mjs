@@ -294,7 +294,7 @@ export class NaturalChat {
         const selector = { accountId, chatType: 'group', peerId },
           config = this.store.conversationSettings(accountId, 'group', peerId);
         if (
-          config.mode !== 'natural' || config.executionMode === 'work' ||
+          config.mode !== 'natural' ||
           [...this.channel.pauses.values()].some(
             (pause) =>
               !pause.selector ||

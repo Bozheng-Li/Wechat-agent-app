@@ -6,16 +6,13 @@ import { REMINDER_REACTIONS, reminderReaction, reminderReceipt } from "./task-co
 import { simpleReminder } from "../tasks/scheduler.mjs";
 import { conversationTaskTool, mediaReplyTool } from "../tasks/conversation-tools.mjs";
 import { stickerReplyTools } from '../media/sticker-tools.mjs';
+import { imageGenerationTool } from '../tools/image-generation.mjs';
 import { conversationMemoryTool } from "../memory/query/tool.mjs";
 import { NATURAL_REASONS, parseNaturalDecision } from "./natural-chat.mjs";
 import { imageMemoryTool } from "../memory/images/tool.mjs";
 import { conversationImageTool } from "../memory/images/request-tool.mjs";
 import { recentGeneratedImageContext } from '../memory/images/recent.mjs';
 import { matches } from "./helpers.mjs";
-import { replyToWork, recordWorkCreation } from '../work/dialogue.mjs';
-import { routeWorkMessage } from '../work/routing.mjs';
-import { workChatFallbackPrompt } from '../work/routing-context.mjs';
-import { workPresentation } from '../work/presentation.mjs';
 import { momentsTool, momentsCommentsTool, momentsWriteTools, momentsAudienceTool } from '../tools/moments.mjs';
 import { momentsLikeRequestTool } from '../tools/moments-likes.mjs';
 import { momentsInteractionTool } from '../tools/moments-interactions.mjs';
@@ -30,8 +27,7 @@ export async function processReply(channel, item) {
   let controller = new AbortController();
   const finished = Promise.withResolvers();
   const active = { ...item, controller, finished: finished.promise };
-  if (item.workLane) channel.workActive.set(record.key, active);
-  else channel.active = active;
+  channel.active = active;
   let timeout = setTimeout(
     () => controller.abort(new ChannelError('MODEL_TIMEOUT', '模型处理超时，未继续发送')),
     channel.timeoutMs
@@ -52,36 +48,13 @@ export async function processReply(channel, item) {
       item.naturalRevision = channel.store.naturalState(record.accountId, record.chatType, record.peerId).humanRevision;
     item.externalSignal?.throwIfAborted();
     channel.store.update(record, { state: 'generating' });
-    if (item.workRouting) {
-      const decision = await routeWorkMessage(channel, item, controller.signal);
-      item.workRoute = decision;
-      if (decision.action === 'chat') {
-        channel.store.update(record, { mode: 'default', workRoute: decision },
-          { message: item.message });
-        item.memorySnapshot = channel.memory.snapshot(record, record.key);
-        // The decision may finish after another member has spoken. Chat
-        // admission is delayed, so the memory append order alone is not a cutoff.
-        const priorKeys = new Set(channel.context(item).map(entry => entry.key));
-        item.memorySnapshot.entries = item.memorySnapshot.entries.filter(entry =>
-          (entry.observedAt ?? entry.time ?? Infinity) < record.createdAt || priorKeys.has(entry.key));
-        item.prompt = [item.prompt, workChatFallbackPrompt(item)].filter(Boolean).join('\n\n');
-      } else {
-        item.workCommand = decision.action === 'new' ? { action: 'create', request: item.text }
-          : decision.action === 'continue' ? { action: 'continue', id: decision.taskId, request: item.text }
-          : { action: decision.action, id: decision.taskId,
-            ...(decision.action === 'status' && !decision.taskId ? { all: true } : {}) };
-        item.workNatural = true;
-        channel.store.update(record, { mode: 'work', workRequest: item.workCommand.action,
-          agentName: undefined, workRoute: decision });
-      }
-    }
     let result;
     let confirmationTask;
     let selectedMedia;
     const imageReferences = [];
     const imageNoteChecks = [];
     let replySelectionApplied = false;
-    const persona = item.modeControl || item.workCommand || item.remoteCommand || item.scheduled?.workJobId ? null
+    const persona = item.remoteCommand ? null
       : channel.store.conversationPersona(record.accountId, record.chatType, record.peerId);
     const scope = {
       accountId: record.accountId,
@@ -97,17 +70,14 @@ export async function processReply(channel, item) {
         .map((segment) => ({ id: segment.data.qq, name: segment.data.name || '' })),
     };
     const reminder =
-      !item.modeControl && !item.workCommand && !item.remoteCommand && !item.ambient &&
+      !item.remoteCommand && !item.ambient &&
       !item.naturalDecision &&
       !item.scheduled &&
       item.config.allowChatTasks !== false &&
       channel.scheduler
         ? simpleReminder(item.text, [persona.name, ...persona.aliases], record.createdAt)
         : null;
-    const work = item.workCommand;
-    if (item.modeControl) {
-      result = { text: item.modeResult };
-    } else if (item.remoteCommand) {
+    if (item.remoteCommand) {
       try {
         channel.remote.assertAllowed(record, controller.signal);
         item.remoteQueryAuthorized = true;
@@ -116,20 +86,6 @@ export async function processReply(channel, item) {
         if (['STATE_WRITE_FAILED', 'CONFIG_CHANGED'].includes(error?.code) ||
             (item.remoteQueryAuthorized && ['REMOTE_NOT_AUTHORIZED', 'AUTH_CHANGED'].includes(error?.code)) || controller.signal.aborted) throw error;
         result = { text: publicError(error, '远程查询未完成，请检查管理员设置').message };
-      }
-    } else if (work) {
-      try {
-        const workScope = { accountId: record.accountId, chatType: record.chatType,
-          peerId: record.peerId, senderId: record.senderId, senderName: record.sender,
-          requestedAt: record.createdAt, requestKey: record.key };
-        if (work.action !== 'help') { channel.work.assertAllowed(workScope, controller.signal); item.workRequestAuthorized = true; }
-        if (item.workNatural && work.request?.length > 12000) throw new ChannelError('WORK_REQUEST_INVALID', '工作要求应为 1–12000 字');
-        result = item.workNatural && work.action !== 'input-required' ? await replyToWork(channel, item, workScope, controller.signal)
-          : { text: channel.work.handle(work, workScope, { defer: true, onCreated: job => recordWorkCreation(channel, item, job) }) };
-      } catch (error) {
-        if (['STATE_WRITE_FAILED', 'CONFIG_CHANGED'].includes(error?.code) || controller.signal.aborted ||
-            item.workRequestAuthorized && error?.code === 'WORK_NOT_AUTHORIZED') throw error;
-        result = { text: publicError(error, '工作任务未创建，请检查工作模式设置').message };
       }
     } else if (item.scheduled?.kind === 'message' || item.scheduled?.retryText) {
       result = { text: item.scheduled.retryText || item.scheduled.content };
@@ -287,6 +243,13 @@ export async function processReply(channel, item) {
               };
           const options = { excludeIds: lastMedia?.replyMedia?.id ? [lastMedia.replyMedia.id] : [], random: channel.random,
             explicitRequest: requestedImage, cooldown: sinceMedia < library.settings.minGapMessages };
+          // A configured 生图 API is usable from ordinary chat, not only from the
+          // removed work mode: the picture joins this reply.
+          let generation;
+          try { generation = channel.imageGeneration?.status?.(); } catch { generation = undefined; }
+          if (generation?.enabled && generation.credentialConfigured)
+            tools.push(imageGenerationTool({ imageGeneration: channel.imageGeneration, library: channel.library,
+              scope, select: selectMedia, assertAllowed: assertMediaAllowed }));
           if (channel.library.search(record.accountId, '', { kind: 'sticker', limit: 1 }).length)
             tools.push(...stickerReplyTools(channel.library, scope, assertMediaAllowed, selectMedia, options));
           if ((requestedImage || sinceMedia >= library.settings.minGapMessages) && channel.library.search(record.accountId, '', { kind: 'image', limit: 1 }).length)
@@ -391,7 +354,6 @@ export async function processReply(channel, item) {
           try {
             const generatedScope = { ...scope, collection: 'generated' },
               assertAllowed = () => { controller.signal.throwIfAborted(); channel.assertAllowed(item); };
-            await channel.work.generatedImages.sync(scope, controller.signal, assertAllowed, { before: record.createdAt });
             const saved = channel.imageMemory.list(generatedScope, { limit: 1, before: record.createdAt });
             generatedContext = recentGeneratedImageContext(channel, scope, record.createdAt,
               { onRead: reference => imageReferences.push(reference) });
@@ -546,17 +508,9 @@ export async function processReply(channel, item) {
     clearTimeout(timeout);
     replySignal.throwIfAborted();
     channel.assertAllowed(item);
-    if ((item.modeControl || item.workCommand || item.remoteCommand ||
-        item.scheduled?.workJobId && !item.scheduled.workStyled && !item.scheduled.workProgress) && typeof channel.runner.polishReport === 'function') {
-      result.text = await channel.runner.polishReport(result.text,item.text,replySignal,workPresentation(channel,record));
-      replySignal.throwIfAborted(); channel.assertAllowed(item);
-    }
     const message = result.text ? [{ type: 'text', data: { text: result.text } }] : [];
-    const workArtifacts = item.scheduled?.workJobId && !item.scheduled.workProgress ? channel.work.prepareArtifacts(item.scheduled.workJobId, record, replySignal, item.scheduled.workRetryId) : [];
-    message.push(...workArtifacts.map(value => value.segment));
     channel.store.update(record, {
       replyDraft: result.text,
-      ...(workArtifacts.length ? { replyArtifacts: workArtifacts.map(value => value.metadata) } : {}),
       ...(result.replyStyleWarning ? { replyStyleWarning: result.replyStyleWarning } : {}),
       ...(result.emptyResponseRetries ? { emptyResponseRetries: result.emptyResponseRetries } : {}),
     });
@@ -593,7 +547,6 @@ export async function processReply(channel, item) {
       ...(targets.length ? { replyMentions: targets } : {}),
       ...(replyMedia ? { replyMedia } : {}),
     });
-    if (item.scheduled?.workJobId && !item.scheduled.workProgress) channel.work.sending(item.scheduled.workJobId, item.scheduled.workRetryId);
     const sent = await channel.transport.send(
       { accountId: record.accountId, chatType: item.message.chatType, peerId: item.message.peerId, message },
       replySignal
@@ -608,17 +561,8 @@ export async function processReply(channel, item) {
       throw new ChannelError('SEND_UNKNOWN', '没有收到可核对的微信服务端回执，结果不明，未自动重发', {
         delivery: 'unknown',
       });
-    if (workArtifacts.length) {
-      const parts = sent.deliveryParts?.filter(value => value.type !== 'text');
-      if (!Array.isArray(parts) || parts.length !== workArtifacts.length || new Set(parts.map(part => part.serverMessageId)).size !== parts.length || parts.some((part, index) => {
-        const artifact = workArtifacts[index].metadata;
-        return part.state !== 'acknowledged' || part.type !== artifact.kind || part.name !== artifact.name || part.sha256 !== artifact.sha256 || part.bytes !== artifact.bytes || !ids.includes(part.serverMessageId);
-      })) throw new ChannelError('SEND_UNKNOWN', '工作成果缺少逐文件可核对的微信确认，送达结果不明，未自动重发', {
-        delivery: 'partially-acknowledged', acknowledgedMessageIds: ids, deliveryParts: sent.deliveryParts ?? [],
-      });
-    }
     // Even cancellation after a network write must preserve a real ACK.
-    const natural = item.modeControl || item.workCommand || item.scheduled?.workJobId ? undefined : channel.natural.after(item, 'sent', result.text, ids);
+    const natural = channel.natural.after(item, 'sent', result.text, ids);
     channel.store.update(
       record,
       {
@@ -664,14 +608,12 @@ export async function processReply(channel, item) {
   } finally {
     clearTimeout(timeout);
     try {
-      if (record.state !== 'sent' && !item.modeControl && !item.workCommand && !item.scheduled?.workJobId) {
+      if (record.state !== 'sent') {
         const natural = channel.natural.after(item, record.state);
         if (natural) channel.natural.save(record, natural);
       }
     } finally {
-      if (item.workLane) channel.workActive.delete(record.key);
-      else channel.active = undefined;
-      if (item.createdWorkJobIds?.length) channel.work.release(item.createdWorkJobIds);
+      channel.active = undefined;
       item.complete?.resolve(record);
       finished.resolve();
     }

@@ -76,11 +76,11 @@ test('natural decision retains its exact JSON contract and keeps fixed text insi
   assert(confirmation.includes('只输出确认协议 CONFIRM_V1'));
 });
 
-test('internal modes and work dialogue retain exactly their established isolation and specialized contracts', () => {
-  for (const mode of ['memory', 'long-memory', 'vision', 'workbench', 'remote-intent', 'work-result',
-    'work-progress', 'work-routing', 'moments-reply', 'moments-publish', 'work-dialogue']) {
+test('internal modes retain exactly their established isolation and specialized contracts', () => {
+  for (const mode of ['memory', 'long-memory', 'vision', 'workbench', 'remote-intent',
+    'moments-reply', 'moments-publish']) {
     const options = { ...common(), mode, systemOverride: '内部合同原文', prompt: '账号原文',
-      adminNotes: '管理员备注', workContext: { capacity: { maxConcurrent: 2 } } };
+      adminNotes: '管理员备注' };
     assert.equal(progressive(options), buildWechatPrompt(options), mode);
   }
 });

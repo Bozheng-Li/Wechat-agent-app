@@ -1,5 +1,4 @@
 import { TasksPage } from "./pages/tasks/page.jsx";
-import { WorkPage } from './pages/work/page.jsx';
 import { MomentsPage } from './pages/moments/page.jsx';
 import { MediaWorkspace } from "./pages/media/workspace.jsx";
 import { DiagnosticsPage } from "./pages/diagnostics/page.jsx";
@@ -14,6 +13,7 @@ import { Overview } from "./pages/overview/page.jsx";
 import { Authorization } from "./pages/conversations/authorization-page.jsx";
 import { ConversationSettings } from "./pages/conversations/settings-page.jsx";
 import { SettingsIndex } from "./pages/settings/page.jsx";
+import { UpdateSettings } from './pages/settings/update-page.jsx';
 import { IdentitySettings } from "./pages/settings/identity-page.jsx";
 import { Changelog } from "./pages/settings/changelog-page.jsx";
 import { WorkspaceTabs } from "./components/workspace-tabs.jsx";
@@ -28,7 +28,7 @@ import { preserveTimeValues } from '../shared/time-settings.mjs';
 import { Records } from "./pages/records/page.jsx";
 import { ExecutionTracesPage } from './pages/traces/page.jsx';
 
-export function PanelContent({ connection, catalog, state }) {
+export function PanelContent({ connection, catalog, state, update }) {
   const {
     motion,
     status,
@@ -100,8 +100,8 @@ export function PanelContent({ connection, catalog, state }) {
     content = <Overview status={status} busy={busy} blocked={blocked} onAction={action} onNavigate={navigate} />;
   else if (page === 'traces') content = <ExecutionTracesPage key={status.account?.id || 'offline'} status={status}
     rpc={(endpoint, payload, signal) => call(connection, endpoint, payload, signal || AbortSignal.timeout(120000))} />;
-  else if (['diagnostics', 'digests', 'work', 'moments'].includes(page)) {
-    const Page = { diagnostics: DiagnosticsPage, digests: DigestsPage, work: WorkPage, moments: MomentsPage }[page];
+  else if (['diagnostics', 'digests', 'moments'].includes(page)) {
+    const Page = { diagnostics: DiagnosticsPage, digests: DigestsPage, moments: MomentsPage }[page];
     content = (
       <Page
         key={page + ':' + (status.account?.id || 'offline')}
@@ -137,8 +137,16 @@ export function PanelContent({ connection, catalog, state }) {
   else if (page === 'automation') content = <AutomationSettings key={status.account?.id || 'offline'} status={status} rows={recordRows}
     target={automationTarget} blocked={blocked} notice={notice} onNavigate={navigate} onBack={back} backLabel={backLabel}
     rpc={(endpoint, payload, signal) => call(connection, endpoint, payload, signal || AbortSignal.timeout(120000))}
-    onToggle={enabled => saveSettings({ ...statusRef.current.settings, enabled }, { area: 'automation',
-      text: enabled ? '自动回复已开启，开始处理之后收到的新消息。' : '自动回复已暂停，授权与记录继续保留。' })} />;
+    onToggle={(feature, enabled) => {
+      const current = statusRef.current.settings || {},
+        next = { ...current, schedules: current.schedules ?? current.enabled, moments: current.moments ?? current.enabled };
+      if (feature === 'replies') next.enabled = enabled; else next[feature] = enabled;
+      saveSettings(next, { area: 'automation', text: {
+        replies: enabled ? '自动回复已开启，开始处理之后收到的新消息。' : '自动回复已暂停，定时任务和朋友圈按各自的开关运行。',
+        schedules: enabled ? '定时任务已开启，按计划发送。' : '定时任务已暂停，已有任务和时间设置继续保留。',
+        moments: enabled ? '朋友圈自动功能已开启。' : '朋友圈自动功能已暂停，各分组设置继续保留。',
+      }[feature] });
+    }} />;
   else if (page === 'time') content = <TimeSettings key={status.account?.id || 'offline'} status={status} blocked={blocked}
     rpc={(endpoint, payload, signal) => call(connection, endpoint, payload, AbortSignal.any([signal, AbortSignal.timeout(120000)]))} onBack={back} backLabel={backLabel} />;
   else if (page === 'image-generation') content = <ImageGenerationSettings status={status} blocked={blocked}
@@ -154,6 +162,15 @@ export function PanelContent({ connection, catalog, state }) {
       />
     );
   else if (page === 'changelog') content = <Changelog connection={connection} onBack={() => setPage('settings')} />;
+  else if (page === 'updates')
+    content = (
+      <UpdateSettings
+        update={update}
+        version={status.version}
+        onBack={() => setPage('settings')}
+        onOpenChangelog={() => setPage('changelog')}
+      />
+    );
   else if (page === 'administrators') content = <AdministratorSettings
     rpc={(endpoint, payload, signal) => call(connection, endpoint, payload, signal)} status={status} draft={drafts.remote || remoteDraft(status.remote)}
     blocked={blocked} busy={busyArea === 'administrators' ? busy : ''} notice={notice}
@@ -186,6 +203,8 @@ export function PanelContent({ connection, catalog, state }) {
                 webSearch: draftsRef.current.model.webSearch,
                 searchProvider: draftsRef.current.model.searchProvider,
                 tavilyBaseURL: draftsRef.current.model.tavilyBaseURL,
+                deepseekBaseURL: draftsRef.current.model.deepseekBaseURL,
+                deepseekModel: draftsRef.current.model.deepseekModel,
                 maxTokens:
                   draftsRef.current.model.maxTokens.trim() === '' ? null : Number(draftsRef.current.model.maxTokens),
                 temperature:
@@ -264,6 +283,7 @@ export function PanelContent({ connection, catalog, state }) {
     content = (
       <StorageSettings
         status={status}
+        rpc={(endpoint, payload, signal) => call(connection, endpoint, payload, signal)}
         draft={drafts.storage}
         blocked={blocked}
         busy={busyArea === 'storage' ? busy : ''}

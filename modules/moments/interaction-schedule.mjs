@@ -1,10 +1,10 @@
 import fs from 'node:fs';
 import { timeLimitMs, assertOnlyTimeChanges } from '../../shared/time-settings.mjs';
 import { randomUUID } from 'node:crypto';
-import { ChannelError, publicError } from '../../shared/contracts.mjs';
+import { ChannelError, publicError, momentsEnabled } from '../../shared/contracts.mjs';
 import { identity } from '../../backend/storage/keys.mjs';
 import { atomicBytes } from '../../backend/storage/atomic-text.mjs';
-import { workPath } from '../work/policy.mjs';
+import { workPath } from '../paths.mjs';
 import { assertRemoteAuthorized, remoteAccessReason } from '../remote/authorization/policy.mjs';
 import { interactionAutomationSettings } from '../../shared/moments-interaction-settings.mjs';
 import { resolveMomentsQuery } from './service.mjs';
@@ -65,7 +65,7 @@ export class MomentsInteractionSchedule {
     const status = this.channel.transport.status();
     if (this.channel.closed || this.channel.fault) return '插件暂不可用，等待恢复';
     if (status.account?.id !== accountId || !status.online) return '等待当前微信账号恢复连接';
-    if (!this.channel.store.settings(accountId).enabled) return '自动回复总开关已关闭，自动互动暂停';
+    if (!momentsEnabled(this.channel.store.settings(accountId))) return '朋友圈自动功能已关闭，自动互动暂停';
     if (!status.momentsReadReady || !status.momentsWriteReady) return '等待朋友圈读写组件就绪';
     if (rule.scope?.chatType !== 'owner' && remoteAccessReason(this.channel, rule.scope)) return '设置此规则的管理员授权已失效，自动互动暂停';
     if (this.manager.active && this.active?.accountId !== accountId) return '等待当前手动互动结束';

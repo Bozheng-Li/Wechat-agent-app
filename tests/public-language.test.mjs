@@ -9,25 +9,21 @@ import { configDraft, configPayload } from '../frontend/shared/drafts.mjs';
 const policy = fs.readFileSync(new URL('../prompts/reply/language.md', import.meta.url), 'utf8');
 const count = (text, value) => text.split(value).length - 1;
 
-test('every public model surface shares one language policy, including JSON text, work and comments', () => {
+test('every public model surface shares one language policy, including JSON text and comments', () => {
   const persona = { ...emptyPersona(), name: '全局名字' };
   for (const mode of ['default', 'nickname', 'participate', 'scheduled', 'natural', 'confirmation',
-    'work-dialogue', 'work-result', 'work-progress', 'moments-reply', 'moments-publish']) {
+    'moments-reply', 'moments-publish']) {
     const text = buildWechatPrompt({ persona, mode, prompt: 'ACCOUNT_CUSTOM', identityMarkdown: '# IDENTITY_CUSTOM',
       ...(mode === 'natural' ? { naturalDecision: { trigger: 'timer' } } : {}),
-      ...(['confirmation', 'work-result', 'work-progress', 'moments-reply', 'moments-publish'].includes(mode) ? { systemOverride: 'MODE_CONTRACT' } : {}) });
+      ...(['confirmation', 'moments-reply', 'moments-publish'].includes(mode) ? { systemOverride: 'MODE_CONTRACT' } : {}) });
     assert.equal(count(text, policy), 1, mode);
     if (mode === 'natural') assert(text.indexOf('只输出一个 JSON 对象') > text.indexOf(policy));
-    if (mode === 'work-dialogue') {
-      assert(text.includes('全局名字'));
-      assert(text.includes('不作为工作要求、执行判断或权限依据'));
-    }
   }
   assert(publicLanguageInstructions().includes(policy));
 });
 
 test('internal extraction, routing, diagnostics and vision retain isolated protocols without public style or persona', () => {
-  for (const mode of ['memory', 'long-memory', 'vision', 'workbench', 'work-routing', 'remote-intent']) {
+  for (const mode of ['memory', 'long-memory', 'vision', 'workbench', 'remote-intent']) {
     const text = buildWechatPrompt({ mode, persona: { name: 'PUBLIC_ROLE_ONLY', prompt: 'PUBLIC_PERSONA_ONLY' },
       prompt: 'PUBLIC_ACCOUNT_ONLY', identityMarkdown: 'PUBLIC_IDENTITY_ONLY', systemOverride: 'INTERNAL_CONTRACT' });
     assert(text.includes('INTERNAL_CONTRACT'));

@@ -65,24 +65,56 @@ test('missing dedicated credentials never route fallback through the host or a c
   assert.equal(calls, 0);
 });
 
-test('DeepSeek uses the actual registered native implementation with an independent key and caps its results', async () => {
-  const seen = [], store = credentials({ [SEARCH_CREDENTIALS.dsh]: 'fixture-native-key', DEEPSEEK_API_KEY: 'fixture-chat-key' });
-  class NativeProvider {
-    constructor(options) { this.resolveOptions = options; }
-    async search(request, signal) { seen.push({ request, signal, options: this.resolveOptions() }); return { sources: Array.from({ length: 8 }, (_, i) => ({ title: String(i), url: `https://arxiv.org/abs/fixture-${i}` })) }; }
-  }
-  const original = new NativeProvider(() => ({ apiKey: 'fixture-host-key' })), providers = new Map([['deepseek-official', original]]);
-  const service = new SearchService({ credentials: store, web: { searchProviders: providers } });
-  const result = await service.forConfig({ searchProvider: 'dsh' }).search({ query: '公开问题', maxResults: 5 });
-  assert.equal(result.sources.length, 5); assert.equal(seen[0].options.apiKey, 'fixture-native-key');
-  assert.equal(seen[0].options.baseURL, 'https://api.deepseek.com/anthropic/v1');
-  assert.equal(original.resolveOptions().apiKey, 'fixture-host-key'); assert.equal(store.stored.get('DEEPSEEK_API_KEY'), 'fixture-chat-key');
+test('DeepSeek search posts the query to the Anthropic-compatible endpoint with its dedicated key and caps results', async () => {
+  const requests = [], store = credentials({ [SEARCH_CREDENTIALS.deepseek]: 'fixture-deepseek-key', DEEPSEEK_API_KEY: 'fixture-chat-key' });
+  let hostCalls = 0;
+  const service = new SearchService({ credentials: store, web: { search: () => { hostCalls++; } } }, { fetchImpl: async (url, options) => {
+    requests.push({ url, options });
+    return Response.json({ content: [
+      { type: 'web_search_tool_result', tool_use_id: 'toolu', content: Array.from({ length: 8 }, (_, i) => ({ type: 'web_search_result', title: '公开资料 ' + i, url: 'https://example.com/' + i, page_age: '2026' })) },
+      { type: 'text', text: '摘要' },
+    ] });
+  } });
+  const result = await service.forConfig({ searchProvider: 'deepseek', deepseekBaseURL: 'https://api.deepseek.com/anthropic/v1', deepseekModel: 'deepseek-v4-flash' })
+    .search({ query: '公开问题', maxResults: 5 }, execution().signal);
+  assert.equal(hostCalls, 0);
+  assert.equal(requests[0].url, 'https://api.deepseek.com/anthropic/v1/messages');
+  assert.equal(requests[0].options.redirect, 'error');
+  assert.equal(requests[0].options.headers.authorization, 'Bearer fixture-deepseek-key');
+  assert.equal(requests[0].options.headers['x-api-key'], 'fixture-deepseek-key');
+  const body = JSON.parse(requests[0].options.body);
+  assert.equal(body.model, 'deepseek-v4-flash');
+  assert.deepEqual(body.tools, [{ type: 'web_search_20250305', name: 'web_search', max_uses: 5 }]);
+  assert.deepEqual(body.messages, [{ role: 'user', content: '公开问题' }]);
+  assert.equal(result.provider, 'deepseek'); assert.equal(result.sources.length, 5);
+  assert.equal(result.sources[0].title, '公开资料 0');
+  assert.equal(store.stored.get('DEEPSEEK_API_KEY'), 'fixture-chat-key');
 });
 
-test('legacy DSH searches retain the existing host route until a dedicated native key is configured', async () => {
-  const seen = [], service = new SearchService({ web: { search: async request => { seen.push(request); return { sources: [] }; } } });
-  await service.forConfig({ searchProvider: 'dsh' }).search({ query: '公开问题', maxResults: 5 });
-  assert.deepEqual(seen, [{ query: '公开问题', maxResults: 5 }]);
+test('legacy dsh selections resolve to DeepSeek search instead of a host provider', async () => {
+  const requests = [], service = new SearchService({ credentials: credentials({ [SEARCH_CREDENTIALS.deepseek]: 'fixture-deepseek-key' }) }, {
+    fetchImpl: async (url, options) => {
+      requests.push({ url, options });
+      return Response.json({ content: [{ type: 'web_search_tool_result', content: [{ type: 'web_search_result', title: '公开资料', url: 'https://example.com/a' }] }] });
+    },
+  });
+  const result = await service.forConfig({ searchProvider: 'dsh' }).search({ query: '公开问题' }, execution().signal);
+  assert.equal(result.provider, 'deepseek'); assert.equal(result.sources.length, 1);
+  assert.equal(requests[0].url, 'https://api.deepseek.com/anthropic/v1/messages');
+});
+
+test('DeepSeek search reports auth, quota and unusable responses without exposing the key', async () => {
+  for (const [response, code] of [
+    [new Response('fixture-private-key', { status: 401 }), 'WEB_SEARCH_AUTH_FAILED'],
+    [new Response('', { status: 402 }), 'WEB_SEARCH_QUOTA'],
+    [new Response('', { status: 429 }), 'WEB_SEARCH_RATE_LIMITED'],
+    [Response.json({ content: [{ type: 'text', text: 'no sources' }] }), 'WEB_SEARCH_UNSUPPORTED'],
+    [Response.json({ content: [{ type: 'web_search_tool_result', content: { type: 'web_search_tool_result_error', error_code: 'max_uses_exceeded' } }] }), 'WEB_SEARCH_SERVICE_FAILED'],
+  ]) {
+    const service = new SearchService({ credentials: credentials({ [SEARCH_CREDENTIALS.deepseek]: 'fixture-deepseek-key' }) }, { fetchImpl: async () => response });
+    const result = JSON.parse(await webSearchTool(() => service.forConfig({ searchProvider: 'deepseek' })).execute({ query: '公开问题' }, execution()));
+    assert.equal(result.code, code); assert(!JSON.stringify(result).includes('fixture-deepseek-key'));
+  }
 });
 
 test('optional Tavily image search exposes actual image links without changing ordinary search requests', async () => {
@@ -115,13 +147,20 @@ test('search configuration validates HTTPS endpoints and defaults new configurat
     assert.throws(() => searchBaseURL(value), error => error.code === 'INVALID_SEARCH_CONFIG');
   assert.equal(searchBaseURL('https://search.example/'), 'https://search.example');
   assert.throws(() => validateModelConfig({ maxTokens: 4096, temperature: null, searchProvider: 'arbitrary' }), error => error.code === 'INVALID_SEARCH_CONFIG');
+  const deepseek = validateModelConfig({ maxTokens: 4096, temperature: null, searchProvider: 'deepseek' });
+  assert.equal(deepseek.searchProvider, 'deepseek');
+  assert.equal(deepseek.deepseekBaseURL, 'https://api.deepseek.com/anthropic/v1');
+  assert.equal(deepseek.deepseekModel, 'deepseek-v4-flash');
+  assert.equal(validateModelConfig({ maxTokens: 4096, temperature: null, searchProvider: 'dsh' }).searchProvider, 'deepseek');
+  assert.throws(() => validateModelConfig({ maxTokens: 4096, temperature: null, searchProvider: 'deepseek', deepseekModel: 'two words' }), error => error.code === 'INVALID_SEARCH_CONFIG');
+  assert.throws(() => validateModelConfig({ maxTokens: 4096, temperature: null, searchProvider: 'deepseek', deepseekBaseURL: 'http://plain.example' }), error => error.code === 'INVALID_SEARCH_CONFIG');
 });
 
 test('search keys are stored through DSH, return only presence, and failed saves preserve existing credentials', async () => {
   const store = credentials(), service = new SearchService({ credentials: store });
   await service.configureCredential('tavily', 'fixture-tavily-key');
   assert.equal(store.stored.get(SEARCH_CREDENTIALS.tavily), 'fixture-tavily-key');
-  assert.deepEqual(service.status(), { credentialStore: true, credentials: { dsh: false, tavily: true } });
+  assert.deepEqual(service.status(), { credentialStore: true, credentials: { deepseek: false, tavily: true } });
   assert(!JSON.stringify(service.status()).includes('fixture-tavily-key'));
   store.set = async () => { throw new Error('fixture-tavily-key private error'); };
   await assert.rejects(service.configureCredential('tavily', 'fixture-replacement'), error => error.code === 'WEB_SEARCH_CREDENTIAL_SAVE_FAILED' && !error.message.includes('fixture-tavily-key'));

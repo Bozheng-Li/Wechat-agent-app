@@ -80,7 +80,7 @@ export function initializeState(store, root) {
     store.data.modelConfig = validateModelConfig({
       ...store.data.modelConfig,
       ...(modelConfigMigrating && store.data.modelConfig.maxTokens === 4096 ? { maxTokens: null } : {}),
-      searchProvider: store.data.modelConfig.searchProvider ?? 'dsh',
+      searchProvider: store.data.modelConfig.searchProvider ?? 'tavily',
     });
   store.data.modelConfigVersion ??= 2;
   for (const settings of Object.values(store.data.accounts)) validateSettings(settings);

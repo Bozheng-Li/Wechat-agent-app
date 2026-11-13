@@ -10,9 +10,9 @@ import { ChannelError } from '../shared/contracts.mjs';
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wechat-moments-likes-')), accountId = 'likes-owner';
-  let clock = Date.parse('2026-11-10T04:00:00Z'), enabled = true;
+  let clock = Date.parse('2026-11-10T04:00:00Z'), enabled = true, moments = null;
   const status = { online: true, account: { id: accountId }, momentsReadReady: true, momentsWriteReady: true }, reads = [], writes = [], posts = new Map();
-  const channel = { now: () => clock, store: { root, data: { storeId: 'likes-test' }, settings: () => ({ enabled, privatePeers: ['friend-a'], groups: [] }) },
+  const channel = { now: () => clock, store: { root, data: { storeId: 'likes-test' }, settings: () => ({ enabled, ...(moments === null ? {} : { moments }), privatePeers: ['friend-a'], groups: [] }) },
     transport: { status: () => status, readMoments: async ({ accountId: requestedAccount, query, scopeKey }, signal) => {
       signal.throwIfAborted(); reads.push({ accountId: requestedAccount, query, scopeKey });
       const all = posts.get(query.userId) ?? [], offset = Number(query.cursor ?? 0), items = all.slice(offset, offset + query.limit);
@@ -31,6 +31,7 @@ function fixture(t) {
   });
   return { root, channel, manager, create, accountId, status, reads, writes, posts, post, advance: ms => { clock += ms; },
     setTime: value => { clock = Date.parse(value); }, pause: () => { enabled = false; }, resume: () => { enabled = true; },
+    setMoments: value => { moments = value; },
     configure: settings => manager.configure(accountId, { userIds: ['friend-a'], ...settings }) };
 }
 
@@ -172,4 +173,13 @@ test('corrupt or wrongly owned persisted state stays untouched and disables only
   const f = fixture(t); fs.mkdirSync(path.dirname(f.manager.file()), { recursive: true }); fs.writeFileSync(f.manager.file(), '{broken');
   const invalid = f.create(); invalid.start(); await invalid.tick(); assert(invalid.list(f.accountId).error);
   assert.equal(fs.readFileSync(f.manager.file(), 'utf8'), '{broken'); assert.equal(f.writes.length, 0); assert.equal(f.channel.closed, undefined);
+});
+
+test('朋友圈自动功能开关单独暂停自动点赞，不影响回复开关', async t => {
+  const f = fixture(t); f.configure({ enabled: true, intervalMinutes: 5 }); f.manager.stopped = false;
+  f.posts.set('friend-a', [f.post(1)]);
+  f.setMoments(false); f.advance(300000); await f.manager.tick();
+  assert.equal(f.reads.length, 0); assert.equal(f.writes.length, 0);
+  f.setMoments(true); f.advance(300000); await f.manager.tick();
+  assert.equal(f.reads.length, 1);
 });

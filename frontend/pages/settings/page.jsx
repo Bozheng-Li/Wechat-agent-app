@@ -22,7 +22,8 @@ export function SettingsIndex({ status, onNavigate }) {
         { page: 'time', icon: 'clock', title: '时间设置', text: '所有超时、执行间隔、活跃时段与保存期限' },
         { page: 'storage', icon: 'folder', title: '工作目录', text: '记录、记忆与任务的保存位置' },
         { page: 'diagnostics', icon: 'spark', title: '运行检查', text: '连接、模型与发送能力的检查结果' },
-        { page: 'changelog', icon: 'history', title: '更新日志', text: '查看版本与更新内容', value: status.version || '' },
+        { page: 'updates', icon: 'download', title: '版本与更新', text: '检查新版本并下载安装包', value: status.version || '' },
+        { page: 'changelog', icon: 'history', title: '更新日志', text: '查看版本与更新内容' },
       ],
     },
   ];

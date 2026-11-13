@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { atomicJson } from "../../backend/storage/atomic-json.ts";
-import { ChannelError, eligible } from "../../shared/contracts.mjs";
+import { ChannelError, schedulesEnabled, authorizedConversation } from "../../shared/contracts.mjs";
 import { assertConversationAuthorized, assertPersonAuthorized } from '../../shared/authorization.mjs';
 
 const clone = (value) => structuredClone(value);
@@ -178,8 +178,11 @@ export class TaskScheduler {
   authorized(selector, fromChat = false) {
     assertConversationAuthorized(this.store, selector);
     for (const target of selector.targets || []) assertPersonAuthorized(this.store, selector.accountId, target.id);
-    if (!eligible(this.store.settings(selector.accountId), selector))
-      throw new ChannelError('TASK_NOT_AUTHORIZED', '该会话未授权或自动回复已暂停，未执行定时任务');
+    const settings = this.store.settings(selector.accountId);
+    if (!schedulesEnabled(settings))
+      throw new ChannelError('TASK_NOT_AUTHORIZED', '定时任务已在自动功能中关闭，未执行本次任务');
+    if (!authorizedConversation(settings, selector))
+      throw new ChannelError('TASK_NOT_AUTHORIZED', '该会话未授权，未执行定时任务');
     if (
       fromChat &&
       this.store.conversationSettings(selector.accountId, selector.chatType, selector.peerId).allowChatTasks === false

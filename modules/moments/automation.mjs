@@ -2,8 +2,8 @@ import fs from 'node:fs';
 import { timeLimitMs, assertOnlyTimeChanges } from '../../shared/time-settings.mjs';
 import { randomUUID } from 'node:crypto';
 import { atomicJson } from '../../backend/storage/atomic-json.ts';
-import { workPath } from '../work/policy.mjs';
-import { ChannelError, publicError } from '../../shared/contracts.mjs';
+import { workPath } from '../paths.mjs';
+import { ChannelError, publicError, momentsEnabled } from '../../shared/contracts.mjs';
 import { identity } from '../../backend/storage/keys.mjs';
 import { momentsId, momentsSettings, momentsReplyEnabled } from '../../shared/moments.mjs';
 import { readPrompt } from '../../prompts/loader.mjs';
@@ -166,7 +166,7 @@ export class MomentsAutomation {
     if (this.pending) return this.pending;
     const status = this.channel.transport.status(), accountId = status.account?.id, rule = this.rule(accountId);
     if (this.stopped || this.error || !accountId || !status.online || !status.momentsReadReady || !status.momentsWriteReady ||
-        !this.channel.store.settings(accountId).enabled || !momentsReplyEnabled(rule.settings) || rule.nextRunAt > this.now()) return Promise.resolve();
+        !momentsEnabled(this.channel.store.settings(accountId)) || !momentsReplyEnabled(rule.settings) || rule.nextRunAt > this.now()) return Promise.resolve();
     this.activeAccount = accountId; this.controller = new AbortController();
     this.pending = this.run(accountId, clone(rule), AbortSignal.any([this.controller.signal, AbortSignal.timeout(timeLimitMs(this.channel.store, 'momentsReplyTimeoutMinutes'))]))
       .finally(() => { this.pending = undefined; this.controller = undefined; this.activeAccount = undefined; });
@@ -174,8 +174,8 @@ export class MomentsAutomation {
   }
   async run(accountId, rule, signal) {
     const check = () => { this.check(accountId, signal);
-      if (this.stopped || !this.channel.store.settings(accountId).enabled || this.rule(accountId).revision !== rule.revision || !momentsReplyEnabled(this.rule(accountId).settings))
-        throw new ChannelError('MOMENTS_SETTINGS_CHANGED', '定时回复已暂停或设置变更，旧轮次未继续'); };
+      if (this.stopped || !momentsEnabled(this.channel.store.settings(accountId)) || this.rule(accountId).revision !== rule.revision || !momentsReplyEnabled(this.rule(accountId).settings))
+        throw new ChannelError('MOMENTS_SETTINGS_CHANGED', '朋友圈自动功能已关闭或定时回复设置变更，旧轮次未继续'); };
     let scanned = 0, replied = 0, skipped = 0, attempted = 0, unavailable = 0, deferred = 0, friend, ownError = null; const startedAt = this.now();
     try {
       check();

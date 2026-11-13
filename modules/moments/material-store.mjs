@@ -6,7 +6,7 @@ import { atomicBytes } from '../../backend/storage/atomic-text.mjs';
 import { ChannelError } from '../../shared/contracts.mjs';
 import { materialFields, materialId, materialObject, materialSettings, materialSourceKey } from '../../shared/moments-materials.mjs';
 import { inspectAssetImage } from '../media/image-format.mjs';
-import { workPath } from '../work/policy.mjs';
+import { workPath } from '../paths.mjs';
 
 export const materialHash = value => createHash('sha256').update(Buffer.isBuffer(value) ? value : JSON.stringify(value)).digest('hex');
 export const materialRevision = () => randomUUID();

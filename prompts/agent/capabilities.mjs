@@ -9,9 +9,6 @@ export const CAPABILITY_SUMMARIES = Object.freeze({
   'moments-read': '读取朋友圈、实际图片、评论和可见范围名单；纯点赞无需读图，需要生成图片动态的评论时先读图',
   'moments-write': '按明确请求点赞、评论、回复、发布或删除朋友圈',
   'moments-plan': '管理朋友圈自动发布、草稿和定时评论计划',
-  'work-sessions': '查看、继续、创建、取消或并行调度工作任务',
-  connections: '查询远端状态，连接 SSH 或编辑器',
-  'image-generation': '按要求生成图片',
 });
 
 export function capabilityCatalog(groups, execute) {

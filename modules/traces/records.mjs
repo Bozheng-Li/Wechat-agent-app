@@ -5,7 +5,6 @@ import { ChannelError } from '../../shared/contracts.mjs';
 
 export function recordType(record) {
   if (record.recoveryOf) return 'maintenance';
-  if (record.workJobId || record.mode === 'work' || record.workRequest) return 'work';
   if (record.mode?.includes('moments')) return 'moments';
   if (record.mode?.includes('sticker') || record.mode?.includes('image')) return 'media';
   if (record.mode?.includes('digest')) return 'digest';
@@ -20,7 +19,7 @@ export function recordState(record) {
 }
 export const recordInput = record => ({ question: record.question, accountId: record.accountId, chatType: record.chatType,
   peerId: record.peerId, senderId: record.senderId, sender: record.sender, messageId: record.messageId, mode: record.mode,
-  taskId: record.taskId, workJobId: record.workJobId, recoveryOf: record.recoveryOf });
+  taskId: record.taskId, recoveryOf: record.recoveryOf });
 export const recordOutput = record => ({ state: record.state, reply: record.reply, replyDraft: record.replyDraft, replyMedia: record.replyMedia,
   reason: record.reason, sentAt: record.sentAt, delivery: record.delivery, acknowledgedMessageIds: record.acknowledgedMessageIds,
   deliveryParts: record.deliveryParts, sessionId: record.sessionId, memoryReflection: record.memoryReflection, taskFallback: record.taskFallback });
@@ -28,31 +27,12 @@ export const recordSpec = record => ({ key: 'record:' + record.key, type: record
   peerId: record.peerId, chatType: record.chatType, actor: record.sender || record.senderId, source: record.mode === 'scheduled' ? 'schedule' : 'chat',
   title: traceSnippet(record.question || (record.mode === 'scheduled' ? '定时执行' : '会话回复'), 100), createdAt: record.createdAt,
   input: recordInput(record), state: recordState(record) });
-export const workSpec = job => ({ key: 'work:' + job.id, type: 'work', accountId: job.accountId, peerId: job.peerId,
-  chatType: job.chatType, actor: job.senderName || job.senderId, source: 'chat', createdAt: job.createdAt,
-  title: traceSnippet(job.request, 100), input: { request: job.request, jobId: job.id, continues: job.continues,
-    workspaceRoot: job.workspaceRoot, folder: job.folder, imageRequest: job.imageRequest }, state: job.state === 'queued' ? 'queued' : 'running' });
-export function workState(job) {
-  if (['pending', 'sending'].includes(job.delivery?.state)) return 'running';
-  if (['failed', 'cancelled'].includes(job.state)) return job.state;
-  if (['unknown', 'partial', 'failed'].includes(job.delivery?.state)) return job.delivery.state;
-  if (job.state === 'completed' && job.delivery?.state === 'not-ready') return 'running';
-  return traceState(job);
-}
-
 export function historicalTraces(channel) {
   const id = spec => 'history-' + createHash('sha256').update(spec.accountId + ':' + spec.key).digest('hex').slice(0, 32);
-  const entries = accountId => [
-    ...(channel.store.data.records || []).filter(record => record.accountId === accountId && record.key).map(record => ({
-      spec: recordSpec(record), state: recordState(record), output: recordOutput(record), startedAt: record.startedAt,
-      finishedAt: TRACE_ACTIVE.has(recordState(record)) ? null : record.sentAt || record.updatedAt, metrics: record.requestMetrics,
-    })),
-    ...(channel.work?.store.data.jobs || []).filter(job => job.accountId === accountId).map(job => ({
-      spec: workSpec(job), state: workState(job),
-      output: { result: job.result, error: job.error, delivery: job.delivery }, startedAt: job.startedAt, finishedAt: job.finishedAt,
-      operations: job.operations, metrics: job.requestMetrics,
-    })),
-  ];
+  const entries = accountId => (channel.store.data.records || []).filter(record => record.accountId === accountId && record.key).map(record => ({
+    spec: recordSpec(record), state: recordState(record), output: recordOutput(record), startedAt: record.startedAt,
+    finishedAt: TRACE_ACTIVE.has(recordState(record)) ? null : record.sentAt || record.updatedAt, metrics: record.requestMetrics,
+  }));
   const summary = entry => ({ id: id(entry.spec), accountId: entry.spec.accountId, type: entry.spec.type, title: entry.spec.title,
     sourceKey: entry.spec.key, peerId: entry.spec.peerId, chatType: entry.spec.chatType, actor: traceSnippet(entry.spec.actor || '', 120),
     state: entry.state, createdAt: entry.spec.createdAt, startedAt: entry.startedAt || null, finishedAt: entry.finishedAt || null,

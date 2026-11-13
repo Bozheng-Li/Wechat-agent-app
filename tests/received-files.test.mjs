@@ -1,24 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { readDocx, receivedFileAccess, wechatFileTool, workModelTools,
-  StateStore, WorkStore, WechatChannel, ChannelError, workOutcome, workReply } from '../lib/testing.js';
-import { planProgressiveTools } from '../modules/tools/progressive.mjs';
-import { CAPABILITY_SUMMARIES } from '../prompts/agent/capabilities.mjs';
+import { readDocx, receivedFileAccess, wechatFileTool,
+  StateStore, ChannelError } from '../lib/testing.js';
 import { wordFixture } from './fixtures/word.mjs';
 
 const sha = data => createHash('sha256').update(data).digest('hex');
 const signal = () => new AbortController().signal;
 const source = { messageId: '18446744073709551001', name: '需求.docx', senderId: 'alice', senderName: '阿禾', time: 1700000000000 };
 const scope = { accountId: 'fixture-self', chatType: 'private', peerId: 'alice', senderId: 'alice', requestedAt: Date.now() };
-function temporary(t) {
-  const parent = fs.realpathSync(os.tmpdir()), root = fs.mkdtempSync(path.join(parent, 'wechat-file-tools-'));
-  t.after(() => { assert.equal(path.dirname(fs.realpathSync(root)), parent); fs.rmSync(root, { recursive: true, force: true }); });
-  return root;
-}
 function fixture({ data = wordFixture(), files, loaded, latestUnavailable = false, assertAllowed = () => {}, saveInput } = {}) {
   const calls = [], row = { ...source, bytes: data.length, resourceId: sha('fixture-source') }, operations = [];
   const transport = { files: async (query, requestSignal) => {
@@ -88,8 +78,6 @@ test('missing attachment bytes end retries without treating the document format 
     assert.match(result.message, /没有收到原文件/); assert(!/查询|扫描|Word|版本不支持/.test(result.message));
   }
   assert(f.calls.every(call => call.query.action === 'list'));
-  const report = workReply({ ...workOutcome('修改刚才的文档', f.operations), result: { text: '无法继续修改' } });
-  assert(report.length < 100); assert(!/查询|扫描|本轮|格式不受支持/.test(report));
 });
 
 test('unobserved references and duplicate filenames never silently select the latest file', async () => {
@@ -154,13 +142,4 @@ test('cancellation and revoked permissions suppress file results and subsequent 
   await assert.rejects(f.invoke({ action: 'read', messageId: source.messageId }), { code: 'AUTH_CHANGED' }); assert.equal(f.operations.length, 0);
   const cancelled = fixture(), controller = new AbortController(); controller.abort();
   await assert.rejects(cancelled.invoke({ action: 'read', messageId: source.messageId }, controller.signal), { name: 'AbortError' }); assert.equal(cancelled.calls.length, 0);
-});
-
-test('standalone work excludes retired attachments and host file execution tools', t => {
-  const cwd = temporary(t), f = fixture(), operations = [];
-  const definitions = workModelTools({ surface: 'native', cwd, fileAccess: f.access, assertAllowed() {}, onOperation: async row => operations.push(row),
-    resolvePolicy: () => ({ mode: 'workspace-write', workspaceRoot: cwd }), limits: {} });
-  for (const name of ['wechat_file', 'wechat_work_output', 'wechat_work_read', 'wechat_work_write', 'wechat_work_exec', 'wechat_work_ssh_exec'])
-    assert(!definitions.some(tool => tool.name === name), name);
-  assert.equal(f.calls.length, 0); assert.equal(operations.length, 0);
 });

@@ -1,4 +1,4 @@
-import test from 'node:test';
+﻿import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -6,8 +6,8 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { deflateSync } from 'node:zlib';
 import { crc32, inspectAssetImage } from '../modules/media/image-format.mjs';
-import { decodeGeneratedImage } from '../modules/work/image-response.mjs';
-import { StateStore, WechatChannel, ImageGenerationService, IMAGE_GENERATION_CREDENTIAL, workTools, readWorkArtifact } from '../lib/testing.js';
+import { decodeGeneratedImage } from '../modules/media/image-response.mjs';
+import { StateStore, ImageGenerationService, IMAGE_GENERATION_CREDENTIAL } from '../lib/testing.js';
 
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 function png(width = 1, height = 1, level = 6) {
@@ -139,49 +139,3 @@ test('empty and upstream-error image responses identify the selected provider an
   assert.equal(f.calls.length, 1);
 });
 
-test('a valid API original above 10 MiB is saved and delivered as an exact file with its individual WeChat acknowledgement', async t => {
-  const bytes = png(2048, 1800, 0);
-  assert(bytes.length > 10 * 1024 * 1024 && bytes.length < 20 * 1024 * 1024);
-  assert.throws(() => inspectAssetImage(bytes), { code: 'ASSET_TOO_LARGE' });
-  const f = fixture(t, { data: [{ b64_json: bytes.toString('base64') }] });
-  const accountId = 'image-owner', peerId = 'alice', sent = [];
-  f.store.configure(accountId, { enabled: true, privatePeers: [peerId], groups: [], prompt: '' });
-  const admins = f.store.config.snapshot(f.store.data); admins.remote = { globalAdminIds: [peerId] }; f.store.config.commit(admins);
-  f.store.setConversationSettings(accountId, 'private', peerId, { ...f.store.conversationSettings(accountId, 'private', peerId), executionMode: 'work', remoteEnabled: true });
-  const runner = { run: async input => {
-    assert.equal(input.mode, 'work-routing'); assert.deepEqual(input.tools, []);
-    assert.equal(JSON.parse(input.text).message, '生成一张小狗的图片给我');
-    return { text: JSON.stringify({ action: 'new', taskId: null,
-      review: { intent: 'execute', evidence: JSON.parse(input.text).message, target: 'none' } }) };
-  } };
-  const workRunner = { run: async input => {
-    await input.onSession('large-image-session');
-    const tool = workTools({ ...input, imageGeneration: f.service }).find(tool => tool.name === 'wechat_work_generate_image');
-    const result = JSON.parse(await tool.execute({ prompt: '小狗图片', path: 'dog.png' }, { signal: input.signal }));
-    assert.equal(result.ok, true); assert.equal(result.artifacts[0].kind, 'file');
-    assert.equal(result.artifacts[0].mediaType, 'image/png'); assert.equal(result.artifacts[0].sha256, hash(bytes));
-    const read = readWorkArtifact(input.cwd, 'dog.png', result.artifacts[0]);
-    assert.deepEqual(Buffer.from(read.segment.data.base64, 'base64'), bytes);
-    return { text: '原图已生成，作为文件附件回传。' };
-  } };
-  f.channel = new WechatChannel({ store: f.store, runner, workRunner, transport: {
-    status: () => ({ online: true, account: { id: accountId } }),
-    send: async payload => {
-      sent.push(payload);
-      const parts = payload.message.map((part, index) => ({ index, type: part.type, state: 'acknowledged',
-        serverMessageId: `image-ack-${sent.length}-${index}`, ...(part.type === 'file' ? {
-          name: part.data.name, bytes: Buffer.from(part.data.base64, 'base64').length, sha256: hash(Buffer.from(part.data.base64, 'base64')),
-        } : {}) }));
-      return { delivery: 'server-ack', serverMessageIds: parts.map(part => part.serverMessageId), deliveryParts: parts };
-    },
-  } });
-  f.channel.work.imageGeneration = f.service;
-  f.channel.receive({ id: 'dog-message', direction: 'incoming', chatType: 'private', peerId, sender: { id: peerId },
-    time: Math.floor(Date.now() / 1000), message: [{ type: 'text', data: { text: '生成一张小狗的图片给我' } }] }, accountId);
-  await f.channel.whenIdle();
-  const [job] = f.channel.work.list({ accountId, chatType: 'private', peerId, senderId: peerId }).jobs;
-  assert.equal(job.state, 'succeeded'); assert.equal(job.delivery.state, 'sent', JSON.stringify(job.delivery)); assert.equal(f.calls.length, 1);
-  const file = sent.flatMap(payload => payload.message).find(part => part.type === 'file');
-  assert(file); assert.deepEqual(Buffer.from(file.data.base64, 'base64'), bytes);
-  assert.equal(job.delivery.artifacts[0].state, 'sent');
-});

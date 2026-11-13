@@ -3,15 +3,14 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { ChannelError, publicError } from '../../shared/contracts.mjs';
 import { artifactMetadata } from '../../shared/work-artifacts.mjs';
-import { inspectAssetImage } from '../media/image-format.mjs';
-import { readWorkArtifact } from './artifacts.mjs';
-import { workFiles } from './result.mjs';
-import { workPath } from './policy.mjs';
+import { inspectAssetImage } from './image-format.mjs';
+import { readWorkArtifact, directoryFiles } from './artifacts.mjs';
+import { workPath } from '../paths.mjs';
 
 export const GENERATED_IMAGES_DIRECTORY = '微信agent/generated-images';
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 const imageFile = value => /\.(?:png|jpe?g)$/i.test(value.path) && ['image/png', 'image/jpeg'].includes(value.mediaType);
-const imageFiles = cwd => workFiles(cwd).filter(file => /\.(?:png|jpe?g)$/i.test(file.path) && file.bytes > 0);
+const imageFiles = cwd => directoryFiles(cwd).filter(file => /\.(?:png|jpe?g)$/i.test(file.path) && file.bytes > 0);
 
 export function workImageSnapshot(cwd) {
   return new Map(imageFiles(cwd).map(file => {

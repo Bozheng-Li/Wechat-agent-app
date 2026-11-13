@@ -340,27 +340,16 @@ test('revoking a group removes only that source from a separately-authorised per
   assert.equal(personAuthorized(f.store, f.accountId, 'bob'), true);
 });
 
-test('revocation removes scheduled tasks, work results, generated-image copies, related digests and recovery records', async t => {
+test('revocation removes scheduled tasks, related digests and recovery records', async t => {
   const f = fixture(t), alice = f.scope(), bob = f.scope('bob'), entry = f.append(alice, 'alice');
   const task = f.scheduler.create({ kind: 'message', content: 'Alice 的提醒', schedule: { kind: 'once', at: Date.now() + 60000 } }, alice),
     retained = f.scheduler.create({ kind: 'message', content: 'Bob 的提醒', schedule: { kind: 'once', at: Date.now() + 60000 } }, bob);
-  const workspace = f.store.storageSettings().workspacePath, jobId = 'aaaaaaaaaaaa', keptId = 'bbbbbbbbbbbb';
-  for (const [id, scope] of [[jobId, alice], [keptId, bob]]) {
-    const folder = '微信agent/work/' + id; fs.mkdirSync(path.join(workspace, folder), { recursive: true });
-    fs.writeFileSync(path.join(workspace, folder, 'result.txt'), scope.peerId);
-    f.channel.work.store.add({ ...scope, id, folder, senderId: scope.peerId, request: '任务', workspaceRoot: workspace, state: 'succeeded',
-      delivery: { state: 'not-ready' }, operations: [], createdAt: Date.now(), updatedAt: Date.now() });
-  }
-  const imageCopy = path.join(workspace, '微信agent/generated-images', jobId); fs.mkdirSync(imageCopy, { recursive: true });
-  fs.writeFileSync(path.join(imageCopy, 'picture.png'), stickerPng());
   const data = f.channel.workbench.disk.load(f.accountId);
   data.summaries.push({ id: 'digest-a', ...alice, source: [{ key: entry.key, text: 'Alice 的原文' }] });
   data.recovery.push({ id: 'recovery-a', ...alice, text: 'Alice 的旧草稿' });
   f.channel.workbench.disk.save(data);
   await f.revoke('alice');
   assert(!f.scheduler.data.tasks.some(row => row.id === task.id)); assert(f.scheduler.data.tasks.some(row => row.id === retained.id));
-  assert.equal(fs.existsSync(path.join(workspace, '微信agent/work', jobId)), false); assert.equal(fs.existsSync(imageCopy), false);
-  assert.equal(fs.readFileSync(path.join(workspace, '微信agent/work', keptId, 'result.txt'), 'utf8'), 'bob');
   assert.equal(f.channel.workbench.disk.load(f.accountId).summaries.length, 0); assert.equal(f.channel.workbench.disk.load(f.accountId).recovery.length, 0);
 });
 
@@ -506,32 +495,6 @@ test('a trace index write failure keeps cleanup pending until the deletion is du
   const rows = JSON.parse(fs.readFileSync(erased.day.file, 'utf8')).rows;
   assert(!rows.some(row => row.id === erased.row.id)); assert(rows.some(row => row.id === kept.row.id));
   assert.deepEqual(f.store.data.authorizationRevocations, []);
-});
-
-test('shared work folders remove only the revoked task files and retain shared or externally changed artifacts', async t => {
-  const f = fixture(t), workspace = f.store.storageSettings().workspacePath, folder = '微信agent/work/aaaaaaaaaaaa',
-    directory = path.join(workspace, folder), now = Date.now();
-  fs.mkdirSync(path.join(directory, '.wechat-work'), { recursive: true });
-  const artifact = (name, content) => {
-    const bytes = Buffer.from(content); fs.writeFileSync(path.join(directory, name), bytes);
-    return { path: name, name, kind: 'file', mediaType: 'text/plain', bytes: bytes.length,
-      sha256: createHash('sha256').update(bytes).digest('hex') };
-  };
-  const privateFile = artifact('alice.txt', '旧任务成果'), shared = artifact('shared.txt', '共用成果'), changed = artifact('changed.txt', '原文件');
-  fs.writeFileSync(path.join(directory, 'changed.txt'), '用户后来修改的内容');
-  const bob = artifact('bob.txt', '保留任务成果');
-  for (const [id, peerId, artifacts] of [['aaaaaaaaaaaa', 'alice', [privateFile, shared, changed]], ['bbbbbbbbbbbb', 'bob', [bob, shared]]]) {
-    fs.writeFileSync(path.join(directory, '.wechat-work', id + '.md'), peerId);
-    f.channel.work.store.add({ ...f.scope(peerId), id, folder, senderId: peerId, request: '任务', workspaceRoot: workspace, state: 'succeeded',
-      delivery: { state: 'not-ready' }, operations: [], result: { text: '成果', files: [], artifacts }, createdAt: now, updatedAt: now });
-  }
-  await f.revoke('alice');
-  assert.equal(fs.existsSync(path.join(directory, 'alice.txt')), false);
-  assert.equal(fs.existsSync(path.join(directory, '.wechat-work/aaaaaaaaaaaa.md')), false);
-  assert.equal(fs.readFileSync(path.join(directory, 'shared.txt'), 'utf8'), '共用成果');
-  assert.equal(fs.readFileSync(path.join(directory, 'changed.txt'), 'utf8'), '用户后来修改的内容');
-  assert.equal(fs.readFileSync(path.join(directory, 'bob.txt'), 'utf8'), '保留任务成果');
-  assert.equal(f.channel.work.store.data.jobs.length, 1); assert.equal(f.channel.work.store.data.jobs[0].peerId, 'bob');
 });
 
 test('authorization and cleanup remain isolated between WeChat accounts', async t => {

@@ -20,6 +20,10 @@ export class CredentialStore {
     fs.mkdirSync(this.root, { recursive: true, mode: 0o700 });
     atomicBytes(this.file(reference), encrypted);
   }
+  async delete(reference) {
+    const file = this.file(reference);
+    try { fs.rmSync(file, { force: true }); return true; } catch { return false; }
+  }
   async resolve(reference) {
     const file = this.file(reference);
     if (!fs.existsSync(file)) return undefined;

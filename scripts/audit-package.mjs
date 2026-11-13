@@ -7,7 +7,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const appDirectory = process.argv.find(value => value.startsWith('--app-dir='))?.slice(10);
 const packaged = appDirectory ? path.resolve(appDirectory) : path.join(root, 'release/win-unpacked/resources/app');
 const hash = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
-for (const file of ['lib/app.js', 'lib/worker.cjs', 'ui/app.js', 'ui/index.html', 'desktop/main.cjs', 'desktop/network.cjs', 'desktop/preload.cjs',
+for (const file of ['lib/app.js', 'lib/worker.cjs', 'ui/app.js', 'ui/index.html', 'desktop/main.cjs', 'desktop/network.cjs', 'desktop/preload.cjs', 'desktop/updates.cjs',
   'config.yaml', 'CHANGELOG.md', 'README.md', 'docs/development.md', 'docs/validation.md', 'docs/images/hero.svg', 'docs/images/overview.png', 'docs/images/models.png',
   'runtime/python/python.exe', 'runtime/python/python313.zip', 'runtime/python/python313._pth',
   'runtime/native_engine.py', 'runtime/native_login_worker.py', 'runtime/native_login_agent.js'])

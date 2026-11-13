@@ -2,10 +2,10 @@ import fs from 'node:fs';
 import { timeLimitMs, assertOnlyTimeChanges } from '../../shared/time-settings.mjs';
 import { createHash, randomUUID } from 'node:crypto';
 import { atomicJson } from '../../backend/storage/atomic-json.ts';
-import { ChannelError, publicError } from '../../shared/contracts.mjs';
+import { ChannelError, publicError, momentsEnabled } from '../../shared/contracts.mjs';
 import { momentsId } from '../../shared/moments.mjs';
 import { momentsLikeSettings, momentsLikeUserId } from '../../shared/moments-likes.mjs';
-import { workPath } from '../work/policy.mjs';
+import { workPath } from '../paths.mjs';
 import { readMomentsWithMemory } from './read.mjs';
 import { assertPersonAuthorized } from '../../shared/authorization.mjs';
 
@@ -91,8 +91,8 @@ export class MomentsLikes {
     const status = this.channel.transport.status();
     if (!status.momentsReadReady || !status.momentsWriteReady || typeof this.channel.transport.readMoments !== 'function' || typeof this.channel.moments?.writeOwner !== 'function')
       throw new ChannelError('MOMENTS_LIKE_UNAVAILABLE', '当前微信组件尚未就绪，未继续自动点赞');
-    if (!this.channel.store.settings(accountId).enabled || this.rule(accountId).revision !== rule.revision || source === 'schedule' && (this.stopped || !rule.settings.enabled))
-      throw new ChannelError('MOMENTS_LIKE_SETTINGS_CHANGED', '自动回复已暂停或点赞设置已变更，旧轮次未继续');
+    if (!momentsEnabled(this.channel.store.settings(accountId)) || this.rule(accountId).revision !== rule.revision || source === 'schedule' && (this.stopped || !rule.settings.enabled))
+      throw new ChannelError('MOMENTS_LIKE_SETTINGS_CHANGED', '朋友圈自动功能已关闭或点赞设置已变更，旧轮次未继续');
   }
   runNow(accountId, requestId, signal) {
     this.check(accountId, signal);
@@ -122,7 +122,7 @@ export class MomentsLikes {
     }
     const status = this.channel.transport.status(), accountId = status.account?.id, rule = this.rule(accountId);
     if (this.stopped || this.closed || this.error || !accountId || !status.online || !status.momentsReadReady || !status.momentsWriteReady ||
-        !this.channel.store.settings(accountId).enabled || !rule.settings.enabled || !rule.settings.userIds.length || rule.nextRunAt > this.now()) return Promise.resolve();
+        !momentsEnabled(this.channel.store.settings(accountId)) || !rule.settings.enabled || !rule.settings.userIds.length || rule.nextRunAt > this.now()) return Promise.resolve();
     return this.launch(accountId, structuredClone(rule), 'moments-like-schedule:' + rule.revision + ':' + rule.nextRunAt, 'schedule');
   }
   launch(accountId, rule, requestId, source, signal) {

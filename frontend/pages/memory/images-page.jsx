@@ -12,9 +12,9 @@ function GenerationSource({ item }) {
   const source = item.generation;
   if (!source) return null;
   return <div className="wa-image-generation-source">
-    <p className="wa-help">{source.fileName} · {source.model ? [source.providerName, source.model].filter(Boolean).join(' / ') : 'Agent 任务产图'}</p>
+    <p className="wa-help">{source.fileName} · {source.model ? [source.providerName, source.model].filter(Boolean).join(' / ') : 'Agent 生成图片'}</p>
     <p className="wa-help">生成要求：{source.prompt || item.sourceText}</p>
-    <p className="wa-help">任务 {source.jobId} · {source.deliveryState === 'sent' ? '微信已确认发送' : '尚未确认发送'}</p>
+    <p className="wa-help">{source.jobId ? '任务 ' + source.jobId + ' · ' : ''}{source.deliveryState === 'sent' ? '微信已确认发送' : '尚未确认发送'}</p>
   </div>;
 }
 
@@ -281,7 +281,7 @@ export function ImageMemoryPage({ rpc, status, rows = [], initialPeer, active = 
                 <div className="wa-empty">
                   <h3>{query ? '没有匹配的图片' : generated ? '这个会话还没有生成图片记忆' : '这个会话还没有图片记忆'}</h3>
                   <p>{query ? generated ? '换个生成要求、文件名或描述再找找。' : '换个描述、发言者或消息关键词再找找。'
-                    : generated ? 'Agent 产出的图片会独立保存，也会补入仍可读取的已有任务图片。' : '之后收到的图片会独立保存，也可保存仍可读取的已有图片。'}</p>
+                    : generated ? '生成图片按会话独立保存，删除后不从原消息自动补回。' : '之后收到的图片会独立保存，也可保存仍可读取的已有图片。'}</p>
                 </div>
               )}
               <div className="wa-between wa-section-space">
@@ -299,7 +299,7 @@ export function ImageMemoryPage({ rpc, status, rows = [], initialPeer, active = 
                 <summary>图片记忆文件与清理</summary>
                 <div className="wa-path-value">{doc.path}</div>
                 <p className="wa-help">
-                  {generated ? '生成图与会话收到的图片分开保存。清理只删除本类记忆副本，不删除工作任务原文件，也不再自动补入已删除的旧图。'
+                  {generated ? '生成图与会话收到的图片分开保存。清理只删除本类记忆副本，已保存的图片不再自动补回，也不再自动补入旧图。'
                     : '独立于微信缓存及文字窗口，压缩或清空文字记忆不会删除这些图片。删除后不从旧消息自动补回；聊天记录里的文字描述仍保留。'}
                 </p>
                 <Button danger disabled={busy || !doc.storedCount} onClick={() => setClearing(true)}>
@@ -307,7 +307,7 @@ export function ImageMemoryPage({ rpc, status, rows = [], initialPeer, active = 
                 </Button>
                 {clearing && (
                   <div className="wa-note-box">
-                    <p>{generated ? '将删除此会话的生成图片记忆及缩略图，并停止补入已有任务图片。会话图片记忆和任务原文件保留。'
+                    <p>{generated ? '将删除此会话的生成图片记忆及缩略图。会话图片记忆保留。'
                       : '将删除此会话保存的图片和缩略图，并停止从现有旧消息补回。生成图片记忆和其他会话保留。'}</p>
                     <Button
                       danger
@@ -396,7 +396,7 @@ export function ImageMemoryPage({ rpc, status, rows = [], initialPeer, active = 
             </Button>
             {removing && (
               <div className="wa-note-box wa-image-delete">
-                <p>{generated ? '删除这张生成图片的记忆副本及缩略图，不从任务自动补回。工作任务原文件保留。'
+                <p>{generated ? '删除这张生成图片的记忆副本及缩略图，之后不从原消息自动补回。'
                   : '删除保存图片及缩略图，不从原消息自动补回。聊天记录中的文字描述保留。'}</p>
                 {deleteAttempted && error && !busy && (
                   <div className="wa-alert is-error" role="alert">{error}</div>

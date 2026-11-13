@@ -65,11 +65,13 @@ Release 对应相同版本的源码标签，安装包作为 Release 附件提供
 
 | 目录 | 职责 |
 | --- | --- |
-| `desktop/` | Electron 窗口、托盘、共用单实例锁、系统代理与受限 IPC。 |
+| `desktop/` | Electron 窗口、托盘、共用单实例锁、系统代理、受限 IPC 与版本更新下载。 |
 | `backend/app/`、`backend/platform/` | 应用生命周期、模型 API、服务配置与 Windows 加密密钥。 |
 | `backend/wechat/`、`runtime/` | 微信连接协议及隔离的运行服务。 |
 | `modules/`、`shared/`、`prompts/` | 回复、记忆、朋友圈、素材、任务与业务契约。 |
 | `frontend/` | React 桌面界面。 |
 | `scripts/`、`tests/` | 构建、运行资源准备与验收。 |
 
-DSH 原生任务、终端、SSH / VS Code 连接和宿主搜索不属于独立版能力。桌面宿主通过受限 IPC 向页面开放本应用的管理操作。
+数据目录（data root）是账号、配置、记录与记忆的唯一根目录。桌面版把指针存在 `%APPDATA%\dsh-Wechat-app\location.json`，DSH 插件存在 `~/.dsh/wechat-agent/location.json`，两份文件格式一致；把两端指到同一个目录即共用数据。切换以“待执行”方式记录，下次启动前复制并校验，实现见 `backend/storage/data-root.mjs`。
+
+DSH 原生任务、终端、SSH / VS Code 连接和宿主搜索不属于独立版能力。联网搜索由应用自己实现：`modules/search/` 既有 Tavily 协议，也有 DeepSeek 官方 Anthropic 兼容接口（`{baseURL}/messages` + `web_search_20250305` 服务端工具），两者各用独立密钥。桌面宿主通过受限 IPC 向页面开放本应用的管理操作。

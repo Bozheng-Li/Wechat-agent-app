@@ -1,17 +1,17 @@
 import { ExecutionTraces } from './store.mjs';
 import { currentTrace, withTrace, traceStep, observeResult } from './context.mjs';
-import { recordSpec, recordState, recordOutput, recordType, workSpec, workState, historicalTraces } from './records.mjs';
+import { recordSpec, recordState, recordOutput, recordType, historicalTraces } from './records.mjs';
 import { TRACE_ACTIVE, traceState } from '../../shared/execution-traces.mjs';
 import { identity } from '../../backend/storage/keys.mjs';
 
 const configuration = channel => ({ model: channel.store.modelChoice?.(), modelConfig: channel.store.modelConfig?.(),
-  persona: channel.store.persona?.(), work: channel.store.config?.data?.work, timeSettings: channel.store.config?.data?.timeSettings });
+  persona: channel.store.persona?.(), timeSettings: channel.store.config?.data?.timeSettings });
 const scopeOf = args => args.find(value => value && typeof value === 'object' && typeof value.accountId === 'string');
 const inputOf = args => args.filter(value => typeof value !== 'function' && !(value instanceof AbortSignal))
   .map(value => value?.store || value?.channel || value?.ctx ? '[运行组件]' : value);
 const updateTitle = fields => fields.state ? ({ queued: '进入执行队列', generating: '生成回复', sending: '提交微信发送', sent: '收到微信确认',
   failed: '执行失败', cancelled: '执行取消', skipped: '跳过回复', unknown: '发送结果待核实', partial: '部分发送完成' }[fields.state] || '更新执行状态')
-  : fields.memoryContext ? '读取会话上下文' : fields.memoryReflection ? '核对记忆依据' : fields.workRoute ? '判断任务类型'
+  : fields.memoryContext ? '读取会话上下文' : fields.memoryReflection ? '核对记忆依据'
     : fields.naturalAction ? '判断是否参与聊天' : fields.sessionId ? '关联模型会话' : fields.replyDraft ? '准备回复内容' : '更新执行记录';
 
 /** Observe existing entry points; never dispatch, retry or authorize a business action here. */
@@ -49,7 +49,7 @@ export function attachExecutionTraces(channel) {
   replace(channel.store, 'update', (original, args) => { const result = original(); traces.safe(() => recorded(args[0], args[1])); return result; });
   replace(channel, 'submitScheduled', (original, [task]) => {
     const context = traces.task({ key: 'record:' + task.recordKey, accountId: task.accountId,
-      type: recordType({ mode: 'scheduled', taskId: task.id, workJobId: task.workJobId, recoveryOf: task.recovery }),
+      type: recordType({ mode: 'scheduled', taskId: task.id, recoveryOf: task.recovery }),
       title: task.content || '定时执行', source: 'schedule', peerId: task.peerId, chatType: task.chatType,
       actor: task.senderName || task.senderId, state: 'queued', input: { task }, configuration: configuration(channel) });
     const failed = failure => traces.update(context, { state: traceState(undefined, failure), output: failure, note: failure?.message });
@@ -67,22 +67,6 @@ export function attachExecutionTraces(channel) {
         failure => traces.update(context, { state: traceState(undefined, failure), output: failure, note: failure?.message })); }
       catch (failure) { traces.update(context, { state: traceState(undefined, failure), output: failure, note: failure?.message }); throw failure; }
     });
-  });
-  const jobContext = (job, initial = false) => traces.task({ ...workSpec(job), coverage: initial ? 'recorded' : 'partial', configuration: configuration(channel) });
-  const recordJob = (job, patch, initial = false) => {
-    const context = jobContext(job, initial); if (!context) return;
-    if (patch && Object.keys(patch).some(key => !['requestMetrics', 'updatedAt'].includes(key))) traces.event(context,
-      patch.delivery ? '工作成果投递状态' : patch.operations ? '保存工作步骤结果' : patch.sessionId ? '关联工作会话' : '工作执行状态', patch);
-    if (job.sessionId) context.row.sessionId = job.sessionId;
-    traces.update(context, { state: workState(job), ...(!TRACE_ACTIVE.has(workState(job)) ? { output: { result: job.result, error: job.error, delivery: job.delivery }, note: job.error?.message } : {}) });
-  };
-  for (const name of ['add', 'update']) replace(channel.work.store, name, (original, args) => {
-    const job = original(); traces.safe(() => recordJob(job, name === 'update' ? args[1] : undefined, name === 'add')); return job;
-  });
-  replace(channel.work, 'execute', (original, [id]) => {
-    const context = traces.safe(() => jobContext(channel.work.store.get(id)));
-    return withTrace(context, () => observeResult(traceStep('执行工作并整理成果', original),
-      () => traces.safe(() => recordJob(channel.work.store.get(id))), failure => traces.update(context, { state: 'failed', output: failure, note: failure.message })));
   });
   function method(object, name, title, type, { root = true, account, input, kind = 'stage', output, before, independent = false } = {}) {
     replace(object, name, (original, args) => {
@@ -109,7 +93,6 @@ export function attachExecutionTraces(channel) {
   method(channel.personMemory, 'update', '更新人物角色卡', 'memory', { independent: true, input: args => [args[0], args[2]] });
   method(channel.runner, 'run', '准备模型任务', 'conversation', { root: false,
     input: args => ({ mode: args[0].mode || 'default', text: args[0].text, history: args[0].history, memory: args[0].memory, images: args[0].images }) });
-  method(channel.work.runner, 'run', '原生工作会话', 'work', { root: false, input: args => ({ request: args[0].request, cwd: args[0].cwd, sessionId: args[0].sessionId, limits: args[0].limits }) });
   for (const [object, names] of [[channel.memory, ['enrich', 'compact']], [channel.longMemory, ['prompt', 'roleContext', 'extract']],
     [channel.imageMemory, ['content', 'describe']], [channel.library, ['prepareSendSegment', 'thumbnail', 'getContent']]])
     for (const name of names) method(object, name, ({ prompt: '读取长期记忆', roleContext: '读取人物上下文', enrich: '补充图片信息', compact: '压缩会话记忆', extract: '提取长期记忆',
@@ -154,8 +137,8 @@ export function attachExecutionTraces(channel) {
     [publishing, ['generate', 'submit', 'preview', 'publishDraft', 'reconcile'], '朋友圈发布'],
     [automation?.materials, ['organize', 'describe', 'generateImage', 'downloadImage'], '朋友圈素材处理'],
     [automation?.interactions, ['preview', 'generateRows', 'execute', 'submit'], '朋友圈分轮互动'],
-    [channel.work.imageGeneration, ['generate'], '生成工作图片'],
-  ]) for (const name of names) method(object, name, title, object === channel.work.imageGeneration ? 'media' : 'moments',
+    [channel.imageGeneration, ['generate'], '生成图片'],
+  ]) for (const name of names) method(object, name, title, object === channel.imageGeneration ? 'media' : 'moments',
     { input: args => inputOf(args).filter(value => !value?.sources?.some?.(source => source?.raw)) });
   for (const name of ['send', 'media', 'files', 'readStickers', 'readStickerContent', 'favoriteSticker', 'recentStickers',
     'readMoments', 'readMomentsPublication', 'readMomentsImages', 'readMomentsAudience', 'writeMoments', 'call'])

@@ -218,22 +218,6 @@ export function ConversationSettings({
           ) : (
             <p className="wa-help">直接处理这个授权联系人的消息，使用此会话自己的记忆。</p>
           )}
-          <div className="wa-subsection">
-            <h2>执行方式</h2>
-            <Field label="聊天或工作" id="wa-execution-mode" help="工作模式允许已授权管理员发起任务，其他成员继续按会话回复模式聊天。">
-              <select id="wa-execution-mode" className="wa-select" value={draft.executionMode} disabled={blocked || !peer.authorized}
-                onChange={event => onChange({ ...draft, executionMode: event.target.value })}>
-                <option value="chat">聊天模式</option><option value="work">工作模式</option>
-              </select>
-            </Field>
-            <p className="wa-help">需要开启远程查询并保存设置。切回聊天模式会取消此会话正在进行的工作，文件保留。</p>
-            <details className="wa-mode-guide">
-              <summary>微信操作与任务文件</summary>
-              <p className="wa-help">管理员可直接说“切换到工作模式”“切回聊天模式”，也可使用 /mode work、/mode chat 或 /mode status。只切换当前会话。</p>
-              <p className="wa-help">普通工作追加到当前任务；/work new 主动新开。结果、文件和图片回传到发起会话，原文件保存在本机。</p>
-              <Button quiet onClick={() => onNavigate('work')}>查看工作任务</Button>
-            </details>
-          </div>
           <div className="wa-subsection wa-conversation-permissions">
             <h2>会话管理员与远程查询</h2>
             <label className="wa-check-label"><input id="wa-remote-enabled" type="checkbox" checked={draft.remoteEnabled}

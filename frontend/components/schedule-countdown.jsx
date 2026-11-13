@@ -5,7 +5,7 @@ import { formatTime } from '../shared/conversations.mjs';
 
 export function ScheduleCountdown({ at, enabled = true, running = false, paused = false, status, action = '执行' }) {
   const valid = Number.isFinite(at) && at > 0;
-  const blocked = paused || (status && (!status.online ? '微信未连接' : status.settings?.enabled === false ? '自动回复总开关已关闭' : false));
+  const blocked = paused || (status && !status.online ? '微信未连接' : false);
   const now = useClock(valid && enabled && !running && !blocked);
   const seconds = countdownSeconds(at, now);
   const state = running ? 'running' : !enabled ? 'disabled' : blocked ? 'paused' : !valid ? 'idle' : seconds > 0 ? 'scheduled' : 'due';

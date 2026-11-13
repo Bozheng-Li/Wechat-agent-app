@@ -107,7 +107,7 @@ export async function memoryMutation(
           if (endpoint === 'memory.images.configure') result = channel.imageMemory.configure(scope, settings);
           else if (endpoint === 'memory.images.delete') result = channel.imageMemory.remove(scope, [payload.imageId]);
           else
-            result = channel.imageMemory.clear(scope, scope.collection === 'generated' ? channel.work.generatedImages.entries(scope) : [
+            result = channel.imageMemory.clear(scope, scope.collection === 'generated' ? [] : [
               ...channel.memory.load(scope).entries,
               ...store.history(scope.accountId, scope.chatType, scope.peerId, 1000),
             ]);

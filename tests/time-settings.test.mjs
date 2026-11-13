@@ -66,7 +66,7 @@ test('one owner page reads existing global, account, provider and conversation t
   assert.equal(byId('role').values.timeoutMinutes, 60);
   assert.equal(byId('images:conversation').values.retentionDays, 30);
   assert.equal(byId('images:generated').values.retentionDays, 30);
-  for (const id of ['runtime', 'work', 'memory', 'image-defaults', 'natural-defaults', 'replies', 'likes', 'interactions', 'materials', 'publishing']) assert(byId(id), id);
+  for (const id of ['runtime', 'memory', 'image-defaults', 'natural-defaults', 'replies', 'likes', 'interactions', 'materials', 'publishing']) assert(byId(id), id);
   assert(!JSON.stringify(groups).includes('https://'), 'the page receives time fields only');
 });
 
@@ -75,7 +75,6 @@ test('time saves persist across reloads and only change the selected fields and 
   await f.save('runtime', { conversationTimeoutSeconds: 420, momentsPublishTimeoutMinutes: 90 });
   await f.save('natural', { minMinutes: 14, maxMinutes: 29 });
   await f.save('role', { intervalMinutes: 75, timeoutMinutes: 20 });
-  await f.save('work', { commandTimeoutSeconds: 120 });
   await f.save('images:generated', { retentionDays: null });
   const reloaded = new StateStore(f.root);
   assert.equal(reloaded.config.data.timeSettings.momentsPublishTimeoutMinutes, 90);
@@ -83,7 +82,6 @@ test('time saves persist across reloads and only change the selected fields and 
   assert.equal(reloaded.roleCardSettings().messageThreshold, 20);
   assert.equal(reloaded.conversationSettings(f.account.id, 'group', f.room).natural.minMinutes, 14);
   assert.equal(reloaded.conversationSettings(f.account.id, 'group', f.room).natural.followupSeconds, 88);
-  assert.equal(reloaded.config.data.work.commandTimeoutSeconds, 120);
   assert.equal(f.channel.timeoutMs, 420000);
   assert.equal(f.channel.imageMemory.load({ ...f.scope, collection: 'generated' }).settings.retentionDays, null);
   assert.equal(f.channel.imageMemory.load({ ...f.scope, collection: 'conversation' }).settings.retentionDays, 30);

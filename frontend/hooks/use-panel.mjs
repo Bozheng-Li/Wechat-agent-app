@@ -337,7 +337,7 @@ export function usePanel(connection) {
     text: enabled ? '会话已授权，可进入设置选择回复模式。' : '已撤销此会话授权，已有记录继续保留。',
   });
   const blocked = !!busy || !!status?.startupError;
-  const navPage = ['model', 'identity', 'persona', 'storage', 'changelog', 'administrators', 'image-generation', 'diagnostics', 'time', 'automation'].includes(page)
+  const navPage = ['model', 'identity', 'persona', 'storage', 'changelog', 'updates', 'administrators', 'image-generation', 'diagnostics', 'time', 'automation'].includes(page)
     ? 'settings'
     : page === 'conversation'
       ? 'authorization'

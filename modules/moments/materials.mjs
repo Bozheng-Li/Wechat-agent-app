@@ -1,4 +1,4 @@
-import { ChannelError, publicError } from '../../shared/contracts.mjs';
+import { ChannelError, publicError, momentsEnabled } from '../../shared/contracts.mjs';
 import { materialFields, materialSourceKey } from '../../shared/moments-materials.mjs';
 import { timeLimitMs, timeDurationLabel } from '../../shared/time-settings.mjs';
 import { readPrompt } from '../../prompts/loader.mjs';
@@ -22,7 +22,7 @@ export class MomentsMaterials extends MomentsMaterialStore {
     if (!this.account(accountId).settings.webImagesEnabled) throw new ChannelError('MOMENTS_MATERIAL_WEB_DISABLED', '素材库的按需联网取图尚未开启');
   }
   webTools(accountId, signal, check, imported = []) {
-    const settings = this.account(accountId).settings, catalog = this.channel.work?.imageGeneration?.catalog?.();
+    const settings = this.account(accountId).settings, catalog = this.channel.imageGeneration?.catalog?.();
     let searches = 0, downloads = 0, generations = 0;
     const combined = abort => AbortSignal.any([signal, abort].filter(Boolean));
     return momentsMaterialWebTools({ check, catalog: catalog ? { defaultProviderId: catalog.defaultProviderId, providers: catalog.providers?.map(({ providerId, name, models, defaultModel, size }) => ({ providerId, name, models, defaultModel, size })) } : null,
@@ -37,7 +37,7 @@ export class MomentsMaterials extends MomentsMaterialStore {
     const check = () => { assertAllowed(); this.check(accountId, signal);
       if (!account.settings.generatedImagesEnabled || account.revision !== revision) throw new ChannelError('MOMENTS_MATERIAL_GENERATE_DISABLED', '素材库按需生图未开启或取材设置已变化'); };
     check();
-    const service = this.channel.work?.imageGeneration;
+    const service = this.channel.imageGeneration;
     if (!service?.generate) throw new ChannelError('IMAGE_GENERATION_DISABLED', '生图接口尚未就绪，请在设置中配置');
     if (typeof requestId !== 'string' || !requestId || requestId.length > 200 || typeof args.prompt !== 'string' || !args.prompt.trim() || args.prompt.length > 4000)
       throw new ChannelError('MOMENTS_MATERIAL_INVALID', '请填写有效的生图要求和操作编号');
@@ -128,7 +128,7 @@ export class MomentsMaterials extends MomentsMaterialStore {
       const entries = doc.entries.slice(-100);
       for (const entry of entries) {
         names.push(entry.senderId, entry.senderName);
-        if (typeof entry.key !== 'string' || !entry.key || typeof entry.text !== 'string' || !entry.text.trim() || entry.mediaOnly || entry.mode === 'work') continue;
+        if (typeof entry.key !== 'string' || !entry.key || typeof entry.text !== 'string' || !entry.text.trim() || entry.mediaOnly) continue;
         const key = materialHash([materialSourceKey(source), entry.key]);
         if (account.seen[key]) continue;
         const at = typeof entry.time === 'number' ? entry.time < 1e12 ? entry.time * 1000 : entry.time : this.now();
@@ -153,7 +153,7 @@ export class MomentsMaterials extends MomentsMaterialStore {
       const revision = account.revision, startedAt = this.now(); let sourceSnapshots = [];
       const check = () => {
         this.check(accountId, abort);
-        if (account.revision !== revision || automatic && (this.stopped || !account.settings.enabled || !this.channel.store.settings(accountId).enabled))
+        if (account.revision !== revision || automatic && (this.stopped || !account.settings.enabled || !momentsEnabled(this.channel.store.settings(accountId))))
           throw new ChannelError('MOMENTS_MATERIAL_CHANGED', '素材整理设置或运行状态已变化，旧结果未保存');
         for (const snapshot of sourceSnapshots) if (!this.sourceAllowed(accountId, snapshot.source) || this.channel.memory.load({ accountId, ...snapshot.source }).generation !== snapshot.generation)
           throw new ChannelError('MOMENTS_MATERIAL_CHANGED', '原聊天记忆已清理、过期或撤权，本次整理结果未保存');
@@ -215,7 +215,7 @@ export class MomentsMaterials extends MomentsMaterialStore {
   start() { if (this.timer || this.error) return; this.stopped = false; this.timer = setInterval(() => { void this.tick().catch(() => {}); }, 30000); this.timer.unref?.(); }
   tick() {
     const status = this.channel.transport.status(), accountId = status.account?.id, account = accountId && this.account(accountId);
-    if (this.stopped || this.pending || this.error || !status.online || !account?.settings.enabled || !this.channel.store.settings(accountId).enabled || !account.nextRunAt || account.nextRunAt > this.now() || this.channel.momentsAutomation?.publishing.pending)
+    if (this.stopped || this.pending || this.error || !status.online || !account?.settings.enabled || !momentsEnabled(this.channel.store.settings(accountId)) || !account.nextRunAt || account.nextRunAt > this.now() || this.channel.momentsAutomation?.publishing.pending)
       return Promise.resolve();
     return this.organize(accountId, 'automatic-' + account.nextRunAt, null, true);
   }

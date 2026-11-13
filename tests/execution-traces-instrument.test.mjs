@@ -20,7 +20,6 @@ function fixture(t) {
       send: async () => ({ delivery: 'unknown' }), readMoments: async () => ({ items: [] }),
       writeMoments: async () => ({ delivery: 'server-ack', postId: 'fixture-post' }),
     },
-    work: { store: { data: { jobs: [] } } },
     memory: { errors: new Map() }, memoryRetries: new Map(),
     async processMemory(scope) { this.memoryRetries.set(identity([scope.accountId, scope.chatType, scope.peerId]), { kind: 'extraction', attempts: 1 }); },
     async process({ record }) { await this.transport.send({ accountId: record.accountId }); this.store.update(record, { state: 'unknown', reason: '未收到确认' }); },
@@ -96,7 +95,7 @@ test('an unavailable observer never duplicates or fails an already performed act
   const value = Promise.resolve('original-result');
   assert.equal(publishing.operation('fixture-account', null, null, () => { count++; return value; }), value);
   assert.equal(await value, 'original-result'); assert.equal(count, 1);
-  const context = channel.traces.task({ accountId: 'fixture-account', type: 'work', title: '上下文隔离' });
+  const context = channel.traces.task({ accountId: 'fixture-account', type: 'conversation', title: '上下文隔离' });
   withTrace(context, () => withTrace(null, () => assert.equal(currentTrace(), undefined)));
 });
 

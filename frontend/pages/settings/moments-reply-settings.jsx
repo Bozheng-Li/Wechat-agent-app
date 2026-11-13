@@ -23,7 +23,7 @@ export function MomentsReplySettings({ rpc, status, blocked }) {
   }}>
     <Feedback state={state} cancellable={false} />
     {state.error && <Button quiet disabled={!!state.busy || blocked} onClick={state.refresh}>重新读取回复设置</Button>}
-    <p className="wa-wb-note">两类评论共用抓取节奏，分别控制开关和数量。微信在线且自动回复总开关开启时运行。</p>
+    <p className="wa-wb-note">两类评论共用抓取节奏，分别控制开关和数量。微信在线且朋友圈自动功能开启时运行。</p>
     <fieldset disabled={busy} className="wa-moments-reply-fields"><legend className="wa-sr-only">自动回复设置</legend>
       <div className="wa-moments-reply-modes">
         <section className="wa-moments-reply-mode" aria-label="自己朋友圈回复设置">

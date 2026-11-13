@@ -67,7 +67,6 @@ export function Overview({ status, busy, blocked, onAction, onNavigate }) {
         {[
           { page: 'memory', icon: 'memory', title: '记忆库', description: '查看会话记忆与共同约定' },
           { page: 'tasks', icon: 'clock', title: '定时任务', description: '管理提醒与执行回执' },
-          { page: 'work', icon: 'work', title: '工作任务', description: '跟进进度，查看交付成果' },
         ].map(item => <button type="button" className="wa-destination" key={item.page} onClick={() => onNavigate(item.page)}>
           <span className="wa-card-icon"><Glyph name={item.icon} /></span>
           <span><strong>{item.title}</strong><small>{item.description}</small></span>

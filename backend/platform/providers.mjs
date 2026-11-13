@@ -55,18 +55,65 @@ export class ModelProviders {
   }
   defaultSelection() { const first = this.providers[0]; return first ? { provider: first.id, model: first.models[0].id } : null; }
   async catalog() { return { groups: await Promise.all(this.providers.map(async ({ id, name }) => ({ id, name, models: await this.listModels(id) }))), default: this.defaultSelection(), failures: [] }; }
+  write(providers) {
+    fs.mkdirSync(path.dirname(this.file), { recursive: true, mode: 0o700 });
+    atomicBytes(this.file, Buffer.from(JSON.stringify({ version: 1, providers }, null, 2) + '\n'));
+    this.providers = providers;
+  }
   save(input, apiKey) {
     const operation = this.queue.then(async () => {
       const provider = validateProvider(input);
       if (apiKey !== undefined && apiKey !== '') await this.credentials.set(providerCredential(provider), apiKey);
       const providers = [...this.providers]; const index = providers.findIndex(value => value.id === provider.id);
       if (index < 0) providers.push(provider); else providers[index] = provider;
-      fs.mkdirSync(path.dirname(this.file), { recursive: true, mode: 0o700 });
-      atomicBytes(this.file, Buffer.from(JSON.stringify({ version: 1, providers }, null, 2) + '\n'));
-      this.providers = providers;
+      this.write(providers);
       return this.list();
     });
     this.queue = operation.catch(() => {}); return operation;
+  }
+  remove(id) {
+    const operation = this.queue.then(async () => {
+      const provider = this.providers.find(value => value.id === id);
+      if (!provider) throw new ChannelError('MODEL_UNAVAILABLE', '该模型服务已不存在，列表已刷新');
+      this.write(this.providers.filter(value => value.id !== provider.id));
+      await this.credentials.delete(providerCredential(provider));
+      return this.list();
+    });
+    this.queue = operation.catch(() => {}); return operation;
+  }
+  /** Ask an OpenAI-compatible endpoint for its model list; never stores the key. */
+  async discover(input = {}, signal) {
+    const baseURL = modelBaseURL(input.baseURL);
+    let apiKey = typeof input.apiKey === 'string' ? input.apiKey.trim() : '';
+    if (!apiKey && typeof input.id === 'string') {
+      const saved = this.providers.find(value => value.id === input.id && value.baseURL === baseURL);
+      if (saved) apiKey = (await this.credentials.resolve(providerCredential(saved)))?.value || '';
+    }
+    const headers = { accept: 'application/json' };
+    if (apiKey) headers.authorization = 'Bearer ' + apiKey;
+    let response;
+    try {
+      response = await fetch(baseURL + '/models', { headers, signal: AbortSignal.any([AbortSignal.timeout(25000), ...(signal ? [signal] : [])]) });
+    } catch { throw new ChannelError('PROVIDER_DISCOVER_FAILED', '无法连接该地址，请检查网络、地址与服务状态'); }
+    if (!response.ok) {
+      if (response.status === 401 || response.status === 403)
+        throw new ChannelError('PROVIDER_DISCOVER_DENIED', '服务拒绝了这次请求（' + response.status + '），请检查 API 密钥');
+      throw new ChannelError('PROVIDER_DISCOVER_FAILED', '服务返回 ' + response.status + '，暂时无法获取模型列表');
+    }
+    let body;
+    try { body = await response.json(); } catch { throw new ChannelError('PROVIDER_DISCOVER_FAILED', '服务返回的内容无法解析为模型列表'); }
+    const rows = Array.isArray(body?.data) ? body.data
+      : Array.isArray(body?.models) ? body.models
+        : Array.isArray(body) ? body : [];
+    const seen = new Set(), models = [];
+    for (const row of rows) {
+      const id = typeof row === 'string' ? row : String(row?.id ?? row?.name ?? '');
+      if (!id || id.length > 200 || /[\s\u0000-\u001f]/u.test(id) || seen.has(id)) continue;
+      seen.add(id);
+      models.push({ id, name: String((typeof row === 'object' && row?.name) || id).slice(0, 200) });
+      if (models.length >= 500) break;
+    }
+    return { models };
   }
   async selectionRequest(selection) {
     const provider = this.get(selection.provider);

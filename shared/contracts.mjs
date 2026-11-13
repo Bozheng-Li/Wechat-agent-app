@@ -7,6 +7,8 @@ export const VERSION = manifest.version;
 export const AGENT_WORKSPACE_NAME = '微信agent';
 export const MAX_TEXT = 12000;
 export const DEFAULT_TAVILY_URL = 'https://api.tavily.com';
+export const DEFAULT_DEEPSEEK_URL = 'https://api.deepseek.com/anthropic/v1';
+export const DEFAULT_DEEPSEEK_MODEL = 'deepseek-v4-flash';
 
 export class ChannelError extends Error {
   constructor(code, message, details = {}) {
@@ -17,12 +19,12 @@ export class ChannelError extends Error {
   }
 }
 
-export function searchBaseURL(input = DEFAULT_TAVILY_URL) {
+export function searchBaseURL(input = DEFAULT_TAVILY_URL, label = 'Tavily') {
   let url;
   try {
     url = new URL(input);
   } catch {
-    throw new ChannelError('INVALID_SEARCH_CONFIG', '请输入 Tavily 服务的 HTTPS 地址。');
+    throw new ChannelError('INVALID_SEARCH_CONFIG', `请输入 ${label} 服务的 HTTPS 地址。`);
   }
   if (
     typeof input !== 'string' ||
@@ -35,7 +37,7 @@ export function searchBaseURL(input = DEFAULT_TAVILY_URL) {
   )
     throw new ChannelError(
       'INVALID_SEARCH_CONFIG',
-      'Tavily 地址必须使用 HTTPS，且不能包含账号、密码、查询参数或片段。'
+      `${label} 地址必须使用 HTTPS，且不能包含账号、密码、查询参数或片段。`
     );
   return url.href.replace(/\/+$/, '');
 }
@@ -106,12 +108,15 @@ export function validateModelConfig(input) {
   for (const key of ['vision', 'webSearch'])
     if (input[key] !== undefined && typeof input[key] !== 'boolean')
       throw new ChannelError('INVALID_MODEL_CONFIG', '图像理解和联网搜索需要选择开启或关闭');
-  const searchProvider = input.searchProvider ?? 'tavily';
+  const searchProvider = input.searchProvider === 'dsh' ? 'deepseek' : input.searchProvider ?? 'tavily';
   const promptStrategy = input.promptStrategy ?? 'legacy';
   if (!['legacy', 'progressive-v1'].includes(promptStrategy))
     throw new ChannelError('INVALID_MODEL_CONFIG', '请选择完整上下文或按需加载模式');
-  if (!['dsh', 'tavily'].includes(searchProvider))
-    throw new ChannelError('INVALID_SEARCH_CONFIG', '请选择 DeepSeek 原生搜索或 Tavily。');
+  if (!['deepseek', 'tavily'].includes(searchProvider))
+    throw new ChannelError('INVALID_SEARCH_CONFIG', '请选择 DeepSeek 搜索或 Tavily。');
+  const deepseekModel = String(input.deepseekModel ?? DEFAULT_DEEPSEEK_MODEL).trim();
+  if (!deepseekModel || deepseekModel.length > 120 || /\s/.test(deepseekModel))
+    throw new ChannelError('INVALID_SEARCH_CONFIG', 'DeepSeek 搜索模型名称最多 120 字，不能包含空格');
   return {
     maxTokens: input.maxTokens ?? null,
     temperature: input.temperature,
@@ -121,6 +126,8 @@ export function validateModelConfig(input) {
     webSearch: input.webSearch ?? false,
     searchProvider,
     tavilyBaseURL: searchBaseURL(input.tavilyBaseURL),
+    deepseekBaseURL: searchBaseURL(input.deepseekBaseURL ?? DEFAULT_DEEPSEEK_URL, 'DeepSeek'),
+    deepseekModel,
   };
 }
 
@@ -277,10 +284,6 @@ export function validateConversationSettings(input) {
   if (input.remoteEnabled !== undefined && typeof input.remoteEnabled !== 'boolean')
     throw new ChannelError('INVALID_ADMIN_IDS', '请选择是否允许此会话远程查询');
   const adminIds = administratorIds(input.adminIds);
-  const executionMode = input.executionMode ?? 'chat', workSenderIds = input.workSenderIds ?? [];
-  if (!['chat', 'work'].includes(executionMode) || !Array.isArray(workSenderIds) || workSenderIds.length > 200 ||
-      workSenderIds.some(id => typeof id !== 'string' || !id || id.length > 150 || /[\s\u0000-\u001f\u007f]/.test(id) || id.endsWith('@chatroom')))
-    throw new ChannelError('INVALID_WORK_SETTINGS', '请选择聊天或工作模式；允许执行的群成员 ID 每行一个，最多 200 个');
   if (!['always', 'on-demand'].includes(memoryMode))
     throw new ChannelError('INVALID_MEMORY_SETTINGS', '请选择每轮读取或按需读取长期记忆');
   return {
@@ -294,8 +297,6 @@ export function validateConversationSettings(input) {
     allowChatTasks: input.allowChatTasks ?? true,
     persona: input.persona == null ? null : validatePersona(input.persona),
     memoryMode,
-    executionMode,
-    workSenderIds: [...new Set(workSenderIds)].sort(),
     remoteEnabled: input.remoteEnabled ?? false,
     adminIds,
     natural: validateNaturalSettings(input.natural),
@@ -375,13 +376,25 @@ export function validateSettings(input) {
   };
   if (typeof input.prompt !== 'string' || input.prompt.length > 4000)
     throw new ChannelError('INVALID_PROMPT', '回复要求最多 4000 字');
-  return {
+  for (const key of ['schedules', 'moments'])
+    if (input[key] !== undefined && typeof input[key] !== 'boolean')
+      throw new ChannelError('INVALID_SETTINGS', '自动功能开关格式不正确');
+  const settings = {
     enabled: input.enabled,
     privatePeers: peers(input.privatePeers, false),
     groups: peers(input.groups, true),
     prompt: input.prompt.trim(),
   };
+  // Older configurations only had the single master switch, so a missing flag
+  // keeps following it until the user sets one explicitly.
+  if (input.schedules !== undefined) settings.schedules = input.schedules;
+  if (input.moments !== undefined) settings.moments = input.moments;
+  return settings;
 }
+
+export const schedulesEnabled = (settings) => (settings?.schedules ?? settings?.enabled) === true;
+
+export const momentsEnabled = (settings) => (settings?.moments ?? settings?.enabled) === true;
 
 export function publicError(error, fallback = '操作失败，请稍后重试') {
   // Only our error vocabulary crosses the UI boundary. Provider/network errors
@@ -432,8 +445,7 @@ export function messageText(message, account, { mode = 'default', persona = empt
     // Strip only a leading mention delimited by WeChat's special space.
     text = text.replace(/^@[^\r\n\u2005]{1,150}\u2005\s*/u, '').trim();
   }
-  const workCommand = /^\/work(?:\s|$)/i.test(text);
-  const command = /^\/(?:agent|pc|dsh)(?:\s|$)/i.test(text) || workCommand;
+  const command = /^\/(?:agent|pc|dsh)(?:\s|$)/i.test(text);
   const nickname =
     mode !== 'default' && nicknameMentioned(text, [persona.name, ...(persona.aliases || []), account.nickname]);
   if (
@@ -449,7 +461,7 @@ export function messageText(message, account, { mode = 'default', persona = empt
           ? '群消息没有呼叫 Agent 名字，也未 @ 当前账号或使用 /agent'
           : '群消息未 @ 当前账号，也未使用 /agent',
     };
-  if (command && !workCommand) text = text.replace(/^\/agent\s*/i, '').trim();
+  if (command) text = text.replace(/^\/agent\s*/i, '').trim();
   if (!text && visual) text = '当前只收到图片或表情消息，没有文字问题。仅在上下文确有看图需求时按需查看普通图片；否则简短接话，不主动分析。表情包不调用图像理解。';
   if (!text) return { reason: '消息没有可回答的正文，当前支持文字、图片和表情包' };
   if (text.length > MAX_TEXT) return { reason: `消息超过 ${MAX_TEXT} 字，未交给模型` };

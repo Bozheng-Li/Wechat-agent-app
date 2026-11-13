@@ -1,4 +1,4 @@
-import { ChannelError, authorizedConversation } from '../../shared/contracts.mjs';
+import { ChannelError, authorizedConversation, schedulesEnabled, momentsEnabled } from '../../shared/contracts.mjs';
 import { assertConversationAuthorized, personAuthorized, authorizationEpoch, assertAuthorizationEpoch } from '../../shared/authorization.mjs';
 import { filterAuthorizedMoments, filterAuthorizedMomentsImages, assertMomentTargetAuthorized, assertMomentReplyAuthorized } from '../moments/read.mjs';
 import { purgeConversationData } from './conversations.mjs';
@@ -7,6 +7,8 @@ import { rememberCleanupSources } from './records.mjs';
 import { assertPublicationAuthorization } from '../../shared/moments-publication.mjs';
 
 const stopping = () => new ChannelError('AUTHORIZATION_CHANGED', '对象授权已变更，旧操作已停止，正在清空相关数据。', { snsDelivery: 'not-sent' });
+
+const paused = (message) => new ChannelError('AUTOMATION_PAUSED', message);
 
 /** Current object authorization applies to owner actions, models and timers.
  * Revocations are journaled before cancellation and resumed after a restart. */
@@ -114,18 +116,29 @@ export class ObjectAuthorization {
     finally { combined.removeEventListener('abort', listener); this.calls.delete(call); }
   }
   changed({ accountId, before, settings, revoked }) {
-    if (!revoked.length && !(before?.enabled && !settings.enabled)) return;
+    const replies = !!before && before.enabled === true && settings.enabled === false;
+    const schedules = !!before && schedulesEnabled(before) && !schedulesEnabled(settings);
+    const moments = !!before && momentsEnabled(before) && !momentsEnabled(settings);
+    if (!revoked.length && !replies && !schedules && !moments) return;
     const reason = stopping();
     this.controllers.get(accountId)?.abort(reason); this.controllers.set(accountId, new AbortController());
     if (revoked.length) for (const call of this.calls) if (call.accountId === accountId) call.revoke();
-    this.channel.personMemory?.cancel({ accountId });
-    this.channel.cancel(reason.message, { accountId }, { resetProgress: false });
-    if (this.channel.scheduler?.current?.task.accountId === accountId) this.channel.scheduler.current.controller.abort(reason);
-    const automation = this.channel.momentsAutomation;
-    for (const manager of [automation, automation?.likes, automation?.materials, automation?.publishing])
-      if (manager?.activeAccount === accountId) manager.controller?.abort(reason);
-    if (automation?.interactions?.active?.accountId === accountId) automation.interactions.active.controller.abort(reason);
-    if (automation?.interactions?.automation?.active?.accountId === accountId) automation.interactions.automation.active.controller.abort(reason);
+    if (replies || revoked.length) {
+      this.channel.personMemory?.cancel({ accountId });
+      this.channel.cancel(reason.message, { accountId }, { resetProgress: false, keepScheduled: true });
+    }
+    // Each automatic feature stops only its own work: pausing replies must not
+    // cancel scheduled reminders, and pausing them must not stop moments.
+    if ((schedules || revoked.length) && this.channel.scheduler?.current?.task.accountId === accountId)
+      this.channel.scheduler.current.controller.abort(revoked.length ? reason : paused('定时任务已关闭，未继续执行'));
+    if (moments || revoked.length) {
+      const pause = revoked.length ? reason : paused('朋友圈自动功能已关闭，未继续执行');
+      const automation = this.channel.momentsAutomation;
+      for (const manager of [automation, automation?.likes, automation?.materials, automation?.publishing])
+        if (manager?.activeAccount === accountId) manager.controller?.abort(pause);
+      if (automation?.interactions?.active?.accountId === accountId) automation.interactions.active.controller.abort(pause);
+      if (automation?.interactions?.automation?.active?.accountId === accountId) automation.interactions.automation.active.controller.abort(pause);
+    }
     this.enqueue(revoked);
   }
   enqueue(scopes = []) {

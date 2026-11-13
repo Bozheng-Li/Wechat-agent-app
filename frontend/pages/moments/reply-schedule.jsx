@@ -21,7 +21,7 @@ export function MomentsReplySchedule({ state, status, onNavigate }) {
         <p className="wa-schedule-time"><span>下一次：{data?.running ? '本轮正在处理' : data?.nextRunAt ? formatTime(data.nextRunAt) : '未安排'}</span>
           {data && <ScheduleCountdown at={data.nextRunAt} enabled={enabled} running={data.running}
             paused={data.error || data.schedulerStarted === false} status={status} action="检查" />}</p>
-        <p className="wa-wb-note">保存后按周期执行；微信在线且自动回复总开关开启时运行，关闭页面仍然有效。</p>
+        <p className="wa-wb-note">保存后按周期执行；微信在线且朋友圈自动功能开启时运行，关闭页面仍然有效。</p>
         {last && <><p>上轮：{runLabels[last.state] ?? last.state} · {formatTime(last.finishedAt)}</p>
           {last.ownEnabled !== false && <p>我的动态：扫描 {last.scanned} 条，尝试 {last.attempted ?? 0} 条，微信确认 {last.replied} 条。</p>}
           {last.friend && <><p>好友对话：扫描 {last.friend.scanned} 条，尝试 {last.friend.attempted} 条，微信确认 {last.friend.replied} 条，跳过 {last.friend.skipped} 条。</p>

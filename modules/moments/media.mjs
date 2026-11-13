@@ -1,33 +1,11 @@
-import fs from 'node:fs';
 import { createHash } from 'node:crypto';
 import { ChannelError } from '../../shared/contracts.mjs';
 import { inspectAssetImage } from '../media/image-format.mjs';
-import { workPath } from '../work/policy.mjs';
 const MAX_BYTES = 10 * 1024 * 1024;
 export function momentsImage(data) {
   const info = inspectAssetImage(data, { maxBytes: MAX_BYTES });
   if (!['image/png', 'image/jpeg'].includes(info.mediaType)) throw new ChannelError('MOMENTS_IMAGE_FORMAT', '朋友圈图片发布目前使用 PNG 或 JPEG，请先转换图片');
   return { data: data.toString('base64'), width: info.width, height: info.height };
-}
-export function workMomentsMedia(cwd) {
-  return { description: 'images 填本任务目录内 PNG/JPEG 图片的相对路径，最多 9 张，每张不超过 10 MiB。',
-    load: async (paths, signal, check) => paths.map(relative => {
-      check(); signal?.throwIfAborted();
-      if (typeof relative !== 'string' || relative.replaceAll('\\', '/').split('/').some(part => part.toLowerCase() === '.wechat-work'))
-        throw new ChannelError('MOMENTS_IMAGE_PATH', '请选择当前任务目录中的普通图片文件');
-      const target = workPath(cwd, relative); let descriptor;
-      try {
-        descriptor = fs.openSync(target, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
-        const stat = fs.fstatSync(descriptor);
-        if (!stat.isFile() || stat.size < 1 || stat.size > MAX_BYTES) throw new ChannelError('MOMENTS_IMAGE_SIZE', '朋友圈图片须为有效普通文件，且每张不超过 10 MiB');
-        const data = fs.readFileSync(descriptor); workPath(cwd, relative); check(); signal?.throwIfAborted();
-        if (data.length !== stat.size) throw new ChannelError('MOMENTS_IMAGE_CHANGED', '图片正在变化，未发布，请先保存完成');
-        return momentsImage(data);
-      } catch (error) {
-        if (error instanceof ChannelError) throw error;
-        throw new ChannelError('MOMENTS_IMAGE_UNAVAILABLE', '当前任务图片无法读取，未上传或发布');
-      } finally { if (descriptor !== undefined) fs.closeSync(descriptor); }
-    }) };
 }
 export function chatMomentsMedia(channel, scope, snapshot, currentKey) {
   const candidates = snapshot.entries.flatMap(entry => (entry.attachments ?? []).filter(attachment => attachment.type === 'image' && attachment.resourceId && entry.messageId)

@@ -10,7 +10,6 @@ export function revokedMessageKeys(channel, scopes, copies = savedCopies(channel
   for (const scope of scopes) {
     if (!keys.has(scope.accountId)) keys.set(scope.accountId, new Set());
     for (const key of scope.messageKeys || []) keys.get(scope.accountId).add(key);
-    for (const id of scope.workIds || []) keys.get(scope.accountId).add('work:' + id);
   }
   for (const view of channel.store.views.values()) for (const row of [...view.messages, ...view.records]) {
     if (scopes.some(scope => authorizationMatches({ ...row, accountId: view.accountId, chatType: view.chatType, peerId: view.peerId }, scope)) && row.key)
@@ -40,14 +39,11 @@ export function rememberCleanupSources(channel, scopes) {
   const same = (a, b) => a.accountId === b.accountId && a.chatType === b.chatType && a.peerId === b.peerId;
   const next = previous.map(row => {
     if (!scopes.some(scope => same(row, scope))) return row;
-    const keys = revokedMessageKeys(channel, [row], copies), workIds = new Set(row.workIds || []), materialIds = new Set(row.materialIds || []);
-    for (const job of channel.work.store.data.jobs) if (relatedRecord(job, [row], keys)) {
-      workIds.add(job.id); keys.get(row.accountId).add('work:' + job.id);
-    }
+    const keys = revokedMessageKeys(channel, [row], copies), materialIds = new Set(row.materialIds || []);
     const account = Object.values(channel.momentsAutomation.materials.data.accounts).find(value => value.accountId === row.accountId);
     for (const item of Object.values(account?.items || {})) if (relatedRecord(item, [row], keys, row.accountId)) materialIds.add(item.id);
     return { ...row, archiveDirectories: archiveDirectories(store, row), messageKeys: [...keys.get(row.accountId)].sort(),
-      workIds: [...workIds].sort(), materialIds: [...materialIds].sort() };
+      materialIds: [...materialIds].sort() };
   });
   if (JSON.stringify(next) !== JSON.stringify(previous)) {
     store.data.authorizationRevocations = next;

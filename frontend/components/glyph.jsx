@@ -61,6 +61,7 @@ export function Glyph({ name = 'chat', size, className = '' }) {
     ),
     close: <path d="m6 6 12 12M6 18 18 6" />,
     refresh: <path d="M20 7V3l-3 3a8 8 0 0 0-13 5M4 17v4l3-3a8 8 0 0 0 13-5M20 7h-5M4 17h5" />,
+    download: <path d="M12 4v10m0 0 4-4m-4 4-4-4M5 19h14" />,
     check: <path d="m5 12 4 4L19 6" />,
     plus: <path d="M12 5v14M5 12h14" />,
     clock: (
@@ -77,6 +78,9 @@ export function Glyph({ name = 'chat', size, className = '' }) {
       </>
     ),
     spark: <path d="m12 3 2.8 6.2L21 12l-6.2 2.8L12 21l-2.8-6.2L3 12l6.2-2.8L12 3ZM20 2v4M18 4h4" />,
+    eye: <><path d="M2.5 12S6 5.8 12 5.8 21.5 12 21.5 12 18 18.2 12 18.2 2.5 12 2.5 12Z" /><circle cx="12" cy="12" r="2.9" /></>,
+    eyeOff: <><path d="m4 4 16 16M10.4 6.1A9.6 9.6 0 0 1 12 6c6 0 9.5 6 9.5 6a17 17 0 0 1-3.4 3.9M6.2 7.9A17 17 0 0 0 2.5 12s3.5 6 9.5 6a9.4 9.4 0 0 0 3.2-.5" /><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" /></>,
+    trash: <><path d="M4 7h16M9.5 7V5.2A1.2 1.2 0 0 1 10.7 4h2.6a1.2 1.2 0 0 1 1.2 1.2V7M6.2 7 7.3 20h9.4L17.8 7M10 11v5.5M14 11v5.5" /></>,
   };
   return (
     <svg

@@ -36,7 +36,7 @@ export function ModelSettings({
   return (
     <>
       <Back label={backLabel} onClick={onBack} />
-      <PageHead icon="model" title="模型设置" description="选择回复使用的模型，并单独设置生成参数。" />
+      <PageHead icon="model" title="模型" description="配置模型服务与凭据，选择回复使用的模型并设置生成参数。" />
       <Notice notice={notice} area="model" />
       <div className="wa-settings-stack wa-content-narrow wa-model-settings">
         <ProviderSettings connection={connection} catalog={catalog} />
@@ -44,7 +44,7 @@ export function ModelSettings({
           <div className="wa-card-heading">
             <div>
               <h2>模型连接</h2>
-              <p className="wa-muted">从上面已配置的模型服务中选择。</p>
+              <p className="wa-muted">从上面已配置的模型服务中选择，选择后自动保存。</p>
             </div>
           </div>
           <ModelPicker connection={connection} catalog={catalog} status={status} blocked={blocked} busy={busy} onSelect={onSelect} />

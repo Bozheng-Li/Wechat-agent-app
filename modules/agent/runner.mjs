@@ -18,7 +18,6 @@ import {
 } from "../../prompts/reply/compose.mjs";
 import { completedText, retryableEmptyResponse } from "./output.mjs";
 import { emptyResponseRetryNote } from '../../prompts/reply/delivery.mjs';
-import { polishWorkResult } from '../work/polish.mjs';
 import { reviewMemoryDraft } from '../memory/roles/reflection.mjs';
 import { stickerDescriptions } from '../media/description.mjs';
 import { TIME_DEFAULTS } from '../../shared/time-settings.mjs';
@@ -58,9 +57,6 @@ export class AppAgentRunner {
   }
   reviewMemoryReply(input, draft, options) {
     return reviewMemoryDraft(this, input, draft, options);
-  }
-  async polishReport(text,request,signal,presentation) {
-    return (await polishWorkResult(this,text,request,signal,presentation)).text;
   }
   async polishReply(reply, request, signal, persona, context = {}) {
     signal.throwIfAborted();

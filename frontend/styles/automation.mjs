@@ -61,64 +61,6 @@ export const automationCss = `
 .wa-panel .wa-automation-field>.wa-help{margin:0;font-weight:400}
 .wa-panel .wa-dirty{font-size:12px;color:var(--wa-warning)}
 
-/* Work: one task, two independent statuses, document output, then an operation timeline. */
-.wa-panel .wa-work-toolbar{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:15px 0;margin-bottom:24px;border-top:1px solid var(--wa-border-soft);border-bottom:1px solid var(--wa-border-soft)}
-.wa-panel .wa-work-queue{display:flex;gap:24px;align-items:center;font-size:12px;color:var(--wa-muted)}
-.wa-panel .wa-work-queue>span{display:flex;align-items:baseline;gap:7px;white-space:nowrap}
-.wa-panel .wa-work-queue strong{font:600 18px/1.2 var(--wa-font-body);color:var(--wa-ink);font-variant-numeric:tabular-nums}
-.wa-panel .wa-work-capacity-controls{display:flex;align-items:center;gap:10px;min-width:0;font-size:12px;color:var(--wa-muted)}
-.wa-panel .wa-work-capacity-controls label{white-space:nowrap}
-.wa-panel .wa-work-capacity-controls select{width:80px;min-height:32px;padding:4px 10px}
-.wa-panel .wa-work-detail{min-width:0}
-.wa-panel .wa-work-selection{display:grid;grid-template-columns:120px minmax(0,1fr);gap:22px;align-items:center;padding:0 0 24px}
-.wa-panel .wa-work-selection>div{display:flex;flex-direction:column;gap:5px;font-size:12px}
-.wa-panel .wa-work-selection>div>label{font-weight:600;color:var(--wa-ink)}
-.wa-panel .wa-work-selection>div>span{font-size:11px;color:var(--wa-muted)}
-.wa-panel .wa-work-selection select{width:100%;min-width:0;max-width:100%;text-overflow:ellipsis}
-.wa-panel .wa-work-summary{padding:18px 20px;margin-bottom:28px;background:var(--wa-subtle);border:1px solid var(--wa-border-soft);border-radius:6px}
-.wa-panel .wa-work-status-line{display:flex;gap:28px;align-items:center;flex-wrap:wrap}
-.wa-panel :is(.wa-work-state,.wa-work-delivery){display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-.wa-panel .wa-work-status-label{font-size:11px;color:var(--wa-muted)}
-.wa-panel .wa-work-status-line>.wa-button{margin-left:auto}
-.wa-panel .wa-work-summary>.wa-help{margin-top:10px}
-.wa-panel .wa-work-progress{font-size:13px;line-height:1.85;padding-top:14px;margin-top:14px;border-top:1px solid var(--wa-border-soft);overflow-wrap:anywhere}
-.wa-panel .wa-work-retry{display:flex;align-items:flex-start;gap:16px;margin-top:18px;padding-top:18px;border-top:1px solid var(--wa-border-soft)}
-.wa-panel .wa-work-retry>.wa-button{flex-shrink:0}
-.wa-panel .wa-work-retry>.wa-help{margin:0;flex:1}
-.wa-panel .wa-work-summary>.wa-alert{margin-top:16px;margin-bottom:0}
-.wa-panel .wa-work-section{padding:0 0 28px;margin-bottom:28px;border-bottom:1px solid var(--wa-border-soft);min-width:0}
-.wa-panel .wa-work-section h3{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;color:var(--wa-muted);margin:0 0 16px}
-.wa-panel .wa-work-section h3>svg{width:15px;height:15px}
-.wa-panel .wa-work-section h3>span{font:11px/1.5 var(--wa-font-mono);margin-left:3px}
-.wa-panel .wa-work-content{white-space:pre-wrap;overflow-wrap:anywhere;word-break:normal;font:13px/1.9 var(--wa-font-body);margin:0;color:var(--wa-ink);min-width:0;max-width:100%;tab-size:2}
-.wa-panel .wa-work-request>.wa-work-content{font-size:15px;line-height:1.85;max-width:850px}
-.wa-panel .wa-work-result>.wa-work-content{max-width:900px;font-size:14px;line-height:2}
-.wa-panel .wa-work-artifacts{width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px}
-.wa-panel .wa-work-artifacts th{font-weight:500;text-align:left;color:var(--wa-muted);font-size:11px;padding:8px 12px;border-bottom:1px solid var(--wa-border)}
-.wa-panel .wa-work-artifacts th:first-child{width:48%}.wa-panel .wa-work-artifacts th:nth-child(2){width:18%}
-.wa-panel .wa-work-artifacts td{padding:15px 12px;border-bottom:1px solid var(--wa-border-soft);vertical-align:top;overflow-wrap:anywhere}
-.wa-panel .wa-work-artifacts :is(th,td):first-child{padding-left:0}.wa-panel .wa-work-artifacts :is(th,td):last-child{padding-right:0}
-.wa-panel .wa-work-file-name{display:flex;gap:10px;align-items:flex-start;font-weight:550;line-height:1.8;min-width:0}
-.wa-panel .wa-work-file-name>svg{width:17px;height:17px;flex-shrink:0;color:var(--wa-muted);margin-top:2px}
-.wa-panel .wa-work-receipt{display:block;margin-top:7px;font:10px/1.7 var(--wa-font-mono);color:var(--wa-muted);word-break:break-all}
-.wa-panel :is(.wa-work-metadata,.wa-work-log){min-width:0;border-bottom:1px solid var(--wa-border-soft);padding:0 0 16px;margin-bottom:16px}
-.wa-panel :is(.wa-work-metadata,.wa-work-log)>summary{cursor:pointer;font-size:12px;font-weight:500;line-height:1.7;padding:4px 0;color:var(--wa-muted)}
-.wa-panel :is(.wa-work-metadata,.wa-work-log)[open]>summary{color:var(--wa-ink);margin-bottom:18px}
-.wa-panel .wa-work-metadata>p{font-size:12px;line-height:1.85;margin:9px 0;overflow-wrap:anywhere}
-.wa-panel .wa-work-operation{position:relative;border-left:1px solid var(--wa-border);padding:0 0 24px 20px;margin-left:12px;min-width:0}
-.wa-panel .wa-work-operation:last-child{padding-bottom:4px}
-.wa-panel .wa-work-operation::before{content:'';position:absolute;left:-4px;top:7px;width:7px;height:7px;border:2px solid var(--wa-surface);border-radius:50%;background:var(--wa-muted)}
-.wa-panel .wa-work-operation[data-state=done]::before{background:var(--wa-success)}
-.wa-panel .wa-work-operation[data-state=failed]::before{background:var(--wa-danger)}
-.wa-panel .wa-work-operation-title{display:flex;align-items:center;gap:10px;line-height:1.7;margin-bottom:10px;font-size:12px}
-.wa-panel .wa-work-operation-index{font:10px/1.7 var(--wa-font-mono);color:var(--wa-muted)}
-.wa-panel .wa-work-operation-title>strong{font-weight:600}
-.wa-panel .wa-work-operation-title>span:last-child{margin-left:auto;color:var(--wa-muted);font-size:11px}
-.wa-panel .wa-work-operation[data-state=failed] .wa-work-operation-title>span:last-child{color:var(--wa-danger)}
-.wa-panel .wa-work-operation>.wa-work-content{font:11px/1.85 var(--wa-font-mono);padding:12px 14px;background:var(--wa-subtle);border-radius:5px;margin:10px 0}
-.wa-panel .wa-work-operation>p{font-size:12px;line-height:1.8;margin-top:8px;overflow-wrap:anywhere}
-.wa-panel .wa-work-files h3{font-size:12px;margin:18px 0 8px}.wa-panel .wa-work-files ul{padding-left:18px;font:11px/1.9 var(--wa-font-mono);overflow-wrap:anywhere}
-
 /* Scheduled tasks: continuous rows and a compact history table. */
 .wa-panel .wa-task-create{margin-bottom:32px;max-width:1020px}
 .wa-panel .wa-task-fields>.wa-form-section{margin-top:26px;padding-top:26px}
@@ -393,9 +335,6 @@ export const automationCss = `
 @media(max-width:900px){
  .wa-panel .wa-wb-split{grid-template-columns:minmax(185px,.7fr) minmax(0,1.3fr)}
  .wa-panel .wa-wb-split>.wa-wb-list{margin-right:20px;padding-right:14px}
- .wa-panel .wa-work-status-line{gap:18px}
- .wa-panel .wa-work-retry{flex-direction:column;gap:10px}
- .wa-panel .wa-work-selection{grid-template-columns:95px minmax(0,1fr);gap:16px}
  .wa-panel .wa-task-history-head,.wa-panel .wa-task-history-row>summary{grid-template-columns:110px minmax(0,1fr) 90px 12px;gap:14px}
  .wa-panel .wa-task-history-row>.wa-task-detail-content{margin-left:124px}
  .wa-panel .wa-automation-editor{padding:22px}
@@ -405,18 +344,6 @@ export const automationCss = `
  .wa-panel .wa-wb-split>.wa-wb-list{max-height:240px;margin:0 0 25px;padding:0 0 12px;border-right:0;border-bottom:1px solid var(--wa-border)}
  .wa-panel .wa-wb-list-item{padding:13px 12px}
  .wa-panel .wa-wb-generator:has(>label:nth-child(3):last-child){grid-template-columns:repeat(2,minmax(0,1fr))}
- .wa-panel .wa-work-toolbar{align-items:flex-start;flex-direction:column;gap:16px}
- .wa-panel .wa-work-capacity-controls{width:100%;justify-content:flex-start}
- .wa-panel .wa-work-capacity-controls>.wa-button{margin-left:auto}
- .wa-panel .wa-work-selection{grid-template-columns:minmax(0,1fr);gap:12px}
- .wa-panel .wa-work-selection>div{flex-direction:row;justify-content:space-between}
- .wa-panel .wa-work-summary{padding:16px}
- .wa-panel .wa-work-status-line{align-items:flex-start;gap:14px;flex-direction:column}
- .wa-panel .wa-work-status-line>.wa-button{margin-left:0}
- .wa-panel .wa-work-artifacts th:first-child{width:42%}.wa-panel .wa-work-artifacts th:nth-child(2){width:21%}
- .wa-panel .wa-work-artifacts th,.wa-panel .wa-work-artifacts td{padding-right:8px;padding-left:8px}
- .wa-panel .wa-work-file-name{gap:7px;flex-direction:column}
- .wa-panel .wa-work-file-name>svg{display:none}
  .wa-panel .wa-task-list-heading{display:none}
  .wa-panel .wa-task-main{grid-template-columns:minmax(0,1fr) auto;gap:13px 14px}
  .wa-panel .wa-task-main>.wa-task-heading{grid-column:1/-1;grid-row:auto}
@@ -459,7 +386,5 @@ export const automationCss = `
  .wa-panel .wa-moments-plan-copy>.wa-wb-between{gap:8px}
  .wa-panel .wa-moments-weekdays{gap:6px}.wa-panel .wa-moments-weekdays .wa-wb-check{padding:6px 9px;font-size:11px}
  .wa-panel .wa-wb-review{padding:14px 15px}
- .wa-panel .wa-work-operation{margin-left:4px;padding-left:14px}
- .wa-panel .wa-work-operation>.wa-work-content{padding:10px;font-size:10px}
 }
 `;

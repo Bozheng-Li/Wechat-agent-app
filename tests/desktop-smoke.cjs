@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
+const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 const { app, safeStorage } = require('electron');
 const { runDesktop } = require('../desktop/main.cjs');
@@ -34,7 +35,18 @@ const poll = async (test, timeout = 20000) => {
 };
 async function main() {
   stage('starting mock model');
+  const updateBytes = crypto.randomBytes(96 * 1024);
+  const updateName = 'Wechat-Agent-App-9.9.9-Setup.exe';
+  const updateDigest = crypto.createHash('sha512').update(updateBytes).digest('base64');
+  const updateFeed = ['version: 9.9.9', 'files:', `  - url: ${updateName}`, `    sha512: ${updateDigest}`,
+    `    size: ${updateBytes.length}`, `path: ${updateName}`, `sha512: ${updateDigest}`,
+    "releaseDate: '2026-11-13T03:00:00.000Z'"].join('\n');
   server = http.createServer((request, response) => {
+    // A local release feed keeps the update check off the network in tests.
+    if (request.url === '/download/latest.yml') { response.writeHead(200, { 'content-type': 'text/yaml' }); response.end(updateFeed); return; }
+    if (request.url === '/download/' + encodeURIComponent(updateName)) {
+      response.writeHead(200, { 'content-length': updateBytes.length }); response.end(updateBytes); return;
+    }
     if (request.url !== '/v1/chat/completions') { response.writeHead(404); response.end(); return; }
     let body = ''; request.on('data', chunk => { body += chunk; });
     request.on('end', () => {
@@ -44,6 +56,7 @@ async function main() {
     });
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  process.env.WECHAT_APP_UPDATE_FEED = 'http://127.0.0.1:' + server.address().port + '/download/latest.yml';
   stage('starting desktop');
   desktop = await bounded(runDesktop({ dataHome, show: true }), 'Desktop startup', 60000); assert.ok(desktop);
   stage('desktop loaded');
@@ -96,41 +109,67 @@ async function main() {
   await js('document.querySelector("[data-testid=nav-settings]").click()');
   await poll(() => js('[...document.querySelectorAll("button")].some(element => element.textContent.includes("模型设置"))'));
   await js('[...document.querySelectorAll("button")].find(element => element.textContent.includes("模型设置")).click()');
-  await poll(() => js('!!document.querySelector("#wa-provider-id")'));
+  await poll(() => js('!!document.querySelector("[data-testid=provider-settings]")'));
   pages.add('overview'); pages.add('settings'); pages.add('model');
   stage('model settings opened');
   const setInput = (selector, value) => js(`(() => { const input=document.querySelector(${JSON.stringify(selector)}); const prototype=input.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype; Object.getOwnPropertyDescriptor(prototype,'value').set.call(input,${JSON.stringify(value)}); input.dispatchEvent(new Event('input',{bubbles:true})); })()`);
+  const clickButton = async label => {
+    const selector = `[...document.querySelectorAll("button")].find(element => element.textContent.trim() === ${JSON.stringify(label)})`;
+    await poll(() => js(`!!${selector}`));
+    await js(`${selector}.click()`);
+  };
+  await clickButton('添加模型提供商');
+  await poll(() => js('!!document.querySelector("[data-testid=provider-create]")'));
+  await js('[...document.querySelectorAll("[role=tab]")].find(element => element.textContent.includes("自定义模型 API")).click()');
+  await poll(() => js('!!document.querySelector("#wa-provider-id")'));
   await setInput('#wa-provider-id', 'fixture'); await setInput('#wa-provider-name', '本地测试服务');
   await setInput('#wa-provider-url', 'http://127.0.0.1:' + server.address().port + '/v1');
-  await setInput('#wa-provider-key', 'desktop-fixture-key'); await setInput('#wa-provider-models', 'fixture-model');
-  await js('document.querySelector("[data-testid=provider-settings] form").requestSubmit()');
-  await poll(() => js('document.body.innerText.includes("模型服务已保存")'));
-  assert.equal(await js('document.querySelector("#wa-provider-key").value'), '');
+  await setInput('#wa-provider-key', 'desktop-fixture-key'); await setInput('[data-testid=model-id-0]', 'fixture-model');
+  await js('document.querySelector("[data-testid=provider-create]").requestSubmit()');
+  try {
+    await poll(() => js('document.body.innerText.includes("已保存 本地测试服务。")'));
+  } catch (error) {
+    console.log('Provider save snapshot: ' + await js('document.querySelector("[data-testid=provider-settings]").innerText.replace(/\\n+/g, " | ")'));
+    throw error;
+  }
+  assert.equal(await js('!!document.querySelector("#wa-provider-key")'), false, 'editor closes after saving');
   stage('provider saved');
-  await js('[...document.querySelectorAll("button")].find(element=>element.textContent.includes("测试已保存的连接")).click()');
+  await clickButton('测试连接');
   await poll(() => js('document.body.innerText.includes("模型连接成功")'));
   assert.equal(modelRequests, 1);
   stage('model connection verified');
   // Pasted comma-separated efforts and clearing the field are normal editing operations.
   stage('saving reasoning efforts with whitespace');
+  await clickButton('编辑');
+  await poll(() => js('!!document.querySelector("[data-testid=provider-edit]")'));
+  await js('document.querySelector("[data-testid=provider-edit] details").open = true');
+  await poll(() => js('!!document.querySelector("[aria-label=\\"fixture-model 推理强度\\"]")'));
   await setInput('[aria-label="fixture-model 推理强度"]', 'low, medium, high');
   stage('reasoning effort input edited');
-  await js('document.querySelector("[data-testid=provider-settings] form").requestSubmit()');
+  await js('document.querySelector("[data-testid=provider-edit]").requestSubmit()');
   stage('reasoning effort form submitted');
-  await poll(() => js('document.body.innerText.includes("模型服务已保存")'));
+  await poll(() => js('document.body.innerText.includes("已保存 本地测试服务。")'));
   assert.deepEqual((await application.call('providers.list')).value.providers[0].models[0].reasoningEfforts, ['low', 'medium', 'high']);
   stage('clearing reasoning efforts');
+  await clickButton('编辑');
+  await poll(() => js('!!document.querySelector("[data-testid=provider-edit]")'));
+  await js('document.querySelector("[data-testid=provider-edit] details").open = true');
+  await poll(() => js('!!document.querySelector("[aria-label=\\"fixture-model 推理强度\\"]")'));
   await setInput('[aria-label="fixture-model 推理强度"]', '');
-  await js('document.querySelector("[data-testid=provider-settings] form").requestSubmit()');
-  await poll(() => js('document.body.innerText.includes("模型服务已保存")'));
+  await js('document.querySelector("[data-testid=provider-edit]").requestSubmit()');
+  await poll(() => js('document.body.innerText.includes("已保存 本地测试服务。")'));
   assert.deepEqual((await application.call('providers.list')).value.providers[0].models[0].reasoningEfforts, []);
   // This button promises to test the saved configuration, including its model ID.
   stage('testing saved model with an edited draft');
-  await setInput('#wa-provider-models', 'unsaved-model');
-  await js('[...document.querySelectorAll("button")].find(element=>element.textContent.includes("测试已保存的连接")).click()');
+  await clickButton('编辑');
+  await poll(() => js('!!document.querySelector("[data-testid=provider-edit]")'));
+  await js('document.querySelector("[data-testid=provider-edit] details").open = true');
+  await poll(() => js('!!document.querySelector("[data-testid=model-id-0]")'));
+  await setInput('[data-testid=model-id-0]', 'unsaved-model');
+  await clickButton('测试连接');
   await poll(() => js('document.body.innerText.includes("模型连接成功")'));
   assert.equal(modelRequests, 2);
-  await setInput('#wa-provider-models', 'fixture-model');
+  await clickButton('收起');
   stage('provider editing verified');
   assert.equal(await js('typeof window.require'), 'undefined');
   assert.equal(await js('typeof window.wechatApp.request'), 'function');
@@ -138,15 +177,62 @@ async function main() {
   const providers = await application.call('providers.list'); assert.equal(JSON.stringify(providers).includes('desktop-fixture-key'), false);
   const selected = await application.call('status'); assert.equal(selected.value.defaultModel.model, 'fixture-model');
   const shot = await capture('Model screenshot'); fs.writeFileSync(path.join(artifacts, 'desktop-models.png'), shot.toPNG());
-  for (const page of ['authorization', 'records', 'moments', 'traces', 'tasks', 'work', 'digests', 'memory', 'assets', 'settings']) {
+  stage('updating from the local release feed');
+  await openPage('settings');
+  await poll(() => js('!!document.querySelector("[data-testid=open-updates]")'));
+  await js('document.querySelector("[data-testid=open-updates]").click()');
+  await poll(() => js('!!document.querySelector("[data-testid=update-settings]")'));
+  const updateButton = label => `[...document.querySelectorAll("[data-testid=update-settings] button")].find(button => button.textContent.trim() === ${JSON.stringify(label)})`;
+  await js(`${updateButton('检查更新')}.click()`);
+  await poll(() => js('document.querySelector("[data-testid=update-state]").textContent.includes("可更新")'));
+  assert.equal(await js('document.querySelector("[data-testid=update-latest]").textContent.trim()'), 'v9.9.9');
+  await js(`${updateButton('下载更新')}.click()`);
+  await poll(() => js('document.querySelector("[data-testid=update-state]").textContent.includes("待安装")'));
+  const downloaded = desktop.updater.state().downloaded;
+  assert.ok(downloaded && fs.existsSync(downloaded), 'the installer is stored in the data directory');
+  assert.equal(fs.statSync(downloaded).size, updateBytes.length);
+  assert.deepEqual(fs.readFileSync(downloaded), updateBytes);
+  stage('update downloaded and verified');
+  await openPage('overview');
+  await poll(() => js('!!document.querySelector("[data-testid=update-banner]")'));
+  await js('[...document.querySelectorAll("[data-testid=update-banner] button")].find(button => button.textContent.trim() === "稍后").click()');
+  await poll(() => js('!document.querySelector("[data-testid=update-banner]")'));
+  stage('update banner dismissed');
+  for (const page of ['authorization', 'records', 'moments', 'traces', 'tasks', 'digests', 'memory', 'assets', 'settings']) {
     await openPage(page);
     assert.equal(await js('document.documentElement.scrollWidth > window.innerWidth + 1'), false, 'Horizontal overflow on ' + page);
   }
   for (const page of ['persona', 'identity', 'model', 'image-generation', 'automation', 'administrators', 'time', 'storage', 'diagnostics', 'changelog']) {
     await openPage('settings'); await openPage(page, '[data-testid="open-' + page + '"]');
+    if (page === 'model') {
+      await poll(() => js('!!document.querySelector("[data-testid=search-settings]")'));
+      assert.deepEqual(await js('[...document.querySelectorAll("#wa-search-provider option")].map(option => option.value)'), ['deepseek', 'tavily']);
+      await js('document.querySelector("[aria-label=启用联网搜索]").click()');
+      await poll(() => js('!document.querySelector("#wa-search-provider").disabled'));
+      await js('(() => { const select = document.querySelector("#wa-search-provider"); select.value = "deepseek"; select.dispatchEvent(new Event("change", { bubbles: true })); return true; })()');
+      await poll(() => js('!!document.querySelector("#wa-deepseek-url") && !document.querySelector("#wa-tavily-url")'));
+      assert.equal(await js('document.querySelector("#wa-deepseek-url").value'), 'https://api.deepseek.com/anthropic/v1');
+      assert.equal(await js('document.querySelector("#wa-deepseek-model").value'), 'deepseek-v4-flash');
+      await js('(() => { const select = document.querySelector("#wa-search-provider"); select.value = "tavily"; select.dispatchEvent(new Event("change", { bubbles: true })); return true; })()');
+      await poll(() => js('!!document.querySelector("#wa-tavily-url") && !document.querySelector("#wa-deepseek-url")'));
+      stage('DeepSeek and Tavily search settings verified');
+    }
+    if (page === 'automation') {
+      await poll(() => js('!!document.querySelector("[data-testid=automation-switch-input-replies]")'));
+      assert.deepEqual(await js('[...document.querySelectorAll("[data-testid^=automation-switch-] h2")].map(item => item.textContent.trim())'),
+        ['自动回复', '定时任务', '朋友圈自动功能']);
+      assert.equal(await js('!!document.querySelector("[aria-label=自动回复总开关]")'), false);
+      fs.writeFileSync(path.join(artifacts, 'desktop-automation.png'), (await capture('Automation screenshot')).toPNG());
+      stage('separate automation switches verified');
+    }
+    if (page === 'storage') {
+      await poll(() => js('!!document.querySelector("[data-testid=data-root-settings]")'));
+      assert.equal(await js('document.querySelector("[data-testid=data-root-current]").textContent.trim()'), dataHome);
+      stage('data root settings verified');
+    }
     if (page === 'identity') await poll(() => js('!!document.querySelector("textarea:not(:disabled)")'));
     if (page === 'time') await poll(() => js('!!document.querySelector("[data-testid^=time-group-]")'));
-    if (page === 'changelog') await poll(() => js('document.body.innerText.includes("未发布")'));
+    if (page === 'changelog') await poll(() => js('document.body.innerText.includes(' + JSON.stringify(require('../package.json').version) + ')'));
   }
   stage('all navigation and settings pages verified');
   await openPage('settings'); await openPage('persona', '[data-testid=open-persona]');
@@ -168,8 +254,19 @@ async function main() {
   await openPage('overview');
   await poll(() => js('document.body.innerText.includes("微信")'));
   fs.writeFileSync(path.join(artifacts, 'desktop-overview.png'), (await capture('Overview screenshot')).toPNG());
-  window.setSize(720, 700);
-  await poll(() => js('window.innerWidth <= 720'));
+  // A minimized or hidden window ignores setSize, so the narrow layout is measured
+  // on a window that is explicitly restored and shown first.
+  window.show(); window.restore(); window.focus(); window.setSize(720, 700);
+  try {
+    await poll(async () => {
+      if ((await js('window.innerWidth')) <= 720) return true;
+      window.show(); window.setSize(720, 700);
+      return false;
+    });
+  } catch (error) {
+    console.log('Resize snapshot: ' + JSON.stringify({ bounds: window.getBounds(), max: window.isMaximized(), visible: window.isVisible(), inner: await js('window.innerWidth'), outer: await js('window.outerWidth'), dpr: await js('window.devicePixelRatio'), zoom: window.webContents.getZoomFactor() }));
+    throw error;
+  }
   await js('document.querySelector("[data-testid=mobile-navigation]").click()');
   await poll(() => js('document.querySelector("[data-testid=mobile-navigation]").getAttribute("aria-expanded") === "true"'));
   await openPage('settings');

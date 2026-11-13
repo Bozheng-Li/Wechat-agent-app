@@ -5,7 +5,7 @@ import { endpoints as tasksEndpoints, tasksMutation } from "../../modules/tasks/
 import { endpoints as settingsEndpoints, settingsMutation } from "../../modules/conversation/actions.mjs";
 import { endpoints as connectionEndpoints, connectionMutation } from "../wechat/actions.mjs";
 import { endpoints as adminEndpoints, administratorMutation } from '../../modules/remote/authorization/actions.mjs';
-import { endpoints as workEndpoints, workMutation } from '../../modules/work/actions.mjs';
+import { endpoints as imageGenerationEndpoints, imageGenerationMutation } from '../../modules/media/image-generation-actions.mjs';
 import { endpoints as timeEndpoints, timeMutation } from '../../modules/settings/time.mjs';
 
 export const mutationHandlers = new Map([
@@ -17,5 +17,5 @@ export const mutationHandlers = new Map([
   ...settingsEndpoints.map((endpoint) => [endpoint, settingsMutation]),
   ...connectionEndpoints.map((endpoint) => [endpoint, connectionMutation]),
   ...adminEndpoints.map(endpoint => [endpoint, administratorMutation]),
-  ...workEndpoints.map(endpoint => [endpoint, workMutation]),
+  ...imageGenerationEndpoints.map(endpoint => [endpoint, imageGenerationMutation]),
 ]);

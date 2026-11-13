@@ -36,8 +36,8 @@ function fixture(t) {
       if (input.mode === 'moments-content-review') { reviews.push(input); return { text: '{"ok":true,"reason":""}' }; }
       models.push(input); const data = JSON.parse(input.text); return { text: JSON.stringify({ theme: data.themes[0] || '日常小观察', text: '今天的小笑话编号' + models.length + '：冰箱里为什么不热闹？因为大家都很冷静。', imagePrompt: data.image ? '一只开心的卡通小狗，无文字' : '' }) }; },
       search: { forConfig: () => ({ search: async args => { searches.push(args); return { content: '公开搜索材料', sources: [{ title: '公开资料', url: 'https://example.com/fact', snippet: '有来源的事实' }] }; } }) } },
-    work: { imageGeneration: { catalog: () => ({ enabled: true, defaultProviderId: '0809', providers: [{ providerId: '0809', defaultModel: 'image-default' }] }),
-      generate: async input => { images.push(input); return { bytes: png, extension: '.png', providerName: '0809', model: input.model }; } } } };
+    imageGeneration: { catalog: () => ({ enabled: true, defaultProviderId: '0809', providers: [{ providerId: '0809', defaultModel: 'image-default' }] }),
+      generate: async input => { images.push(input); return { bytes: png, extension: '.png', providerName: '0809', model: input.model }; } } };
   channel.moments = new MomentsService(channel); channel.momentsAutomation = new MomentsAutomation(channel);
   const manager = channel.momentsAutomation.publishing, advance = ms => { clock += ms; };
   const configure = () => { manager.configure(accountId, { enabled: true, minGapMinutes: 0, maxPostsPer24Hours: 24 }); manager.stopped = false; };
@@ -221,12 +221,12 @@ test('concurrent ticks and restart reuse the consumed occurrence, with one AI ca
 
 for (const origin of ['preview', 'schedule']) test(`${origin} can spend more than ten minutes on research, text and images without an earlier publishing timeout`, async t => {
   const f = timedFixture(t), settings = { research: true, image: { mode: 'ai' } };
-  const search = f.channel.runner.search.forConfig().search, run = f.channel.runner.run, image = f.channel.work.imageGeneration.generate;
+  const search = f.channel.runner.search.forConfig().search, run = f.channel.runner.run, image = f.channel.imageGeneration.generate;
   f.channel.runner.search.forConfig = () => ({ search: async (request, abort) => {
     f.advance(35000); abort.throwIfAborted(); return search(request, abort);
   } });
   f.channel.runner.run = async input => { f.advance(input.mode === 'moments-publish' ? 700000 : 10000); input.signal.throwIfAborted(); return run(input); };
-  f.channel.work.imageGeneration.generate = async (input, abort) => { f.advance(24999); abort.throwIfAborted(); return image(input, abort); };
+  f.channel.imageGeneration.generate = async (input, abort) => { f.advance(24999); abort.throwIfAborted(); return image(input, abort); };
   if (origin === 'schedule') { f.configure(); await f.plan(settings); f.advance(60000); await f.manager.tick(); }
   else await f.manager.preview(accountId, settings, 'slow-preview', signal());
   const result = f.manager.list(accountId).runs[0];
@@ -251,8 +251,8 @@ test('generation aborts at one hour, records failure and never retries or publis
 });
 
 test('an image timeout reserves time for text-only fallback and does not repeat image generation', async t => {
-  const f = timedFixture(t), entered = Promise.withResolvers(), image = f.channel.work.imageGeneration.generate;
-  f.channel.work.imageGeneration.generate = (input, abort) => {
+  const f = timedFixture(t), entered = Promise.withResolvers(), image = f.channel.imageGeneration.generate;
+  f.channel.imageGeneration.generate = (input, abort) => {
     entered.resolve(); return new Promise((resolve, reject) => abort.addEventListener('abort', () => reject(abort.reason), { once: true }));
   };
   const pending = f.manager.preview(accountId, { image: { mode: 'ai' } }, 'slow-image', signal());
@@ -265,7 +265,7 @@ test('an image timeout reserves time for text-only fallback and does not repeat 
   const existing = await f.manager.preview(accountId, { image: { mode: 'ai' } }, 'slow-image', signal());
   assert.equal(existing.state, 'draft'); assert(existing.text); assert.equal(f.models.length, 1); assert.equal(f.writes.length, 0);
   await f.manager.publishDraft(accountId, existing.id, signal()); assert.equal(f.writes.length, 1); assert.equal(f.writes[0].query.images, undefined);
-  f.channel.work.imageGeneration.generate = image;
+  f.channel.imageGeneration.generate = image;
   const retry = await f.manager.preview(accountId, { image: { mode: 'ai' } }, 'explicit-image-retry', signal());
   assert.equal(retry.state, 'draft'); assert.notEqual(retry.id, existing.id); assert.equal(f.models.length, 2);
   assert.equal(f.manager.list(accountId).runs.length, 2); assert.equal(f.writes.length, 1);
@@ -487,7 +487,7 @@ test('AI images use 0809 by default, preview safely and retain byte integrity th
 });
 test('a failed image falls back to a single confirmed text-only post without repeating the image charge', async t => {
   const f = fixture(t); f.configure(); await f.plan({ image: { mode: 'ai' } }); f.advance(60000);
-  f.channel.work.imageGeneration.generate = async input => { f.images.push(input); throw new ChannelError('IMAGE_GENERATION_EMPTY', '生图为空'); };
+  f.channel.imageGeneration.generate = async input => { f.images.push(input); throw new ChannelError('IMAGE_GENERATION_EMPTY', '生图为空'); };
   await f.manager.tick(); const run = f.manager.list(accountId).runs[0]; assert.equal(run.state, 'published'); assert(run.text); assert.equal(f.writes.length, 1);
   assert.equal(run.textOnly, true); assert.equal(f.writes[0].query.images, undefined); assert.equal(run.error, null);
   await f.manager.publishDraft(accountId, run.id, signal()); await f.manager.tick(); assert.equal(f.images.length, 1); assert.equal(f.writes.length, 1);
@@ -533,7 +533,7 @@ for (const stage of ['research', 'image']) test(`cancelling during ${stage} neve
   const f = fixture(t), entered = Promise.withResolvers(); f.configure(); await f.plan({ research: stage === 'research', image: { mode: 'ai' } }); f.advance(60000);
   const wait = (_input, abort) => { entered.resolve(abort); return new Promise((resolve, reject) => abort.addEventListener('abort', () => reject(abort.reason), { once: true })); };
   if (stage === 'research') f.channel.runner.search.forConfig = () => ({ search: wait });
-  else f.channel.work.imageGeneration.generate = wait;
+  else f.channel.imageGeneration.generate = wait;
   const pending = f.manager.tick(), abort = await entered.promise;
   assert.throws(() => f.manager.cancel('another-account'), { code: 'ACCOUNT_CHANGED' }); assert.equal(abort.aborted, false);
   f.manager.cancel(accountId); await pending;
@@ -551,7 +551,7 @@ test('text-only fallback removes an image-dependent sentence in one bounded revi
     if (data.fallbackText) { revisions++; assert.deepEqual(input.tools, []); assert.equal(data.image, false); }
     return { text: JSON.stringify({ theme: '日常心情与小笑话', text: data.fallbackText ? '今天想给生活留一点发呆的空白。' : '如图，今天想给生活留一点空白。', imagePrompt: data.image ? '一张留白的图片' : '' }) };
   };
-  f.channel.work.imageGeneration.generate = async () => { attempts++; throw new ChannelError('IMAGE_GENERATION_NETWORK', '图片连接中断'); };
+  f.channel.imageGeneration.generate = async () => { attempts++; throw new ChannelError('IMAGE_GENERATION_NETWORK', '图片连接中断'); };
   await f.manager.tick(); const run = f.manager.list(accountId).runs[0];
   assert.equal(run.state, 'published'); assert.equal(revisions, 1); assert.equal(attempts, 1);
   assert(run.textBeforeFallback.includes('如图')); assert(!run.text.includes('如图'));
@@ -560,7 +560,7 @@ test('text-only fallback removes an image-dependent sentence in one bounded revi
 
 test('an unknown WeChat receipt after image fallback pauses the plan and is never resubmitted', async t => {
   const f = fixture(t); f.configure(); const plan = await f.plan({ image: { mode: 'ai' } }); f.advance(60000);
-  f.channel.work.imageGeneration.generate = async () => { throw new ChannelError('IMAGE_GENERATION_NETWORK', '图片连接中断'); };
+  f.channel.imageGeneration.generate = async () => { throw new ChannelError('IMAGE_GENERATION_NETWORK', '图片连接中断'); };
   f.channel.transport.writeMoments = async args => { f.writes.push(args); throw new ChannelError('NETWORK', '确认连接中断', { delivery: 'unknown' }); };
   await f.manager.tick(); const run = f.manager.list(accountId).runs[0];
   assert.equal(run.state, 'unknown'); assert.equal(run.textOnly, true); assert.equal(f.manager.plan(accountId, plan.id).settings.enabled, false);

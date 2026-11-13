@@ -4,14 +4,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { StateStore, WorkStore, WechatChannel, MomentsService, momentsTool, momentsCommentsTool, momentsWriteTools, momentsAudienceTool, resolveMomentsAudience, workMomentsMedia, chatMomentsMedia, createPluginService, rpcHandler, ChannelError, identity } from '../lib/testing.js';
+import { StateStore, WechatChannel, MomentsService, momentsTool, momentsCommentsTool, momentsWriteTools, momentsAudienceTool, resolveMomentsAudience, chatMomentsMedia, createPluginService, rpcHandler, ChannelError, identity } from '../lib/testing.js';
 import { createHash } from 'node:crypto';
-import { fixtureWorkRouteDecision } from './fixtures/work-dialogue.mjs';
 import { MOMENTS_PUBLISH_RPC_TIMEOUT_MS } from '../shared/moments-publishing.mjs';
 const accountId = 'moments-bot', room = 'moments-room@chatroom';
 const scope = { accountId, chatType: 'private', peerId: 'alice', senderId: 'alice' };
 function fixture(t, { beforeRead, beforeWrite } = {}) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wechat-moments-test-')), store = new StateStore(root), reads = [], models = [], sent = [], works = [];
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wechat-moments-test-')), store = new StateStore(root), reads = [], models = [], sent = [];
   store.configure(accountId, { enabled: true, privatePeers: ['alice', 'bob', 'visible-author'], groups: [room], prompt: '' });
   const config = store.config.snapshot(store.data); config.remote = { globalAdminIds: ['alice'] }; store.config.commit(config);
   for (const [type, peerId] of [['private', 'alice'], ['private', 'bob'], ['group', room]])
@@ -38,24 +37,19 @@ function fixture(t, { beforeRead, beforeWrite } = {}) {
       ...(args.query.action === 'delete' ? { deleted: true } : {}) };
   }, send: async payload => { sent.push(payload); return { delivery: 'server-ack', serverMessageIds: ['moments-ack-' + sent.length] }; } };
   const runner = { run: async input => {
-    if (input.mode === 'work-routing') return { text: JSON.stringify(fixtureWorkRouteDecision(JSON.parse(input.text), { action: 'new' })) };
-    if (input.mode === 'work-result') return { text: JSON.parse(input.text).result };
     models.push(input); const tool = input.tools.find(tool => tool.name === 'wechat_moments_read');
     if (tool && input.text.includes('朋友圈')) {
       const result = JSON.parse(await tool.execute({ action: 'timeline' }, { signal: input.signal })); return { text: result.ok ? '已读取朋友圈' : result.message };
     }
     return { text: '普通聊天' };
   } };
-  const workRunner = { run: async input => { works.push(input); await input.onSession('moments-work-session');
-    const tool = momentsTool({ ...input.moments, assertAllowed: input.assertAllowed, onOperation: input.onOperation });
-    const result = JSON.parse(await tool.execute({ action: 'timeline' }, { signal: input.signal })); return { text: result.items[0].text }; } };
-  const channel = new WechatChannel({ store, runner, workRunner, transport }); let serial = 0;
+  const channel = new WechatChannel({ store, runner, transport }); let serial = 0;
   const receive = (text, overrides = {}) => channel.receive({ id: 'moments-message-' + ++serial, direction: 'incoming',
     time: Math.floor(Date.now() / 1000), chatType: 'private', peerId: 'alice', sender: { id: 'alice' },
     message: [{ type: 'text', data: { text } }], ...overrides }, accountId);
   t.after(async () => { await channel.close(); const resolved = fs.realpathSync(root); assert.equal(path.dirname(resolved), fs.realpathSync(os.tmpdir()));
     assert.match(path.basename(resolved), /^wechat-moments-test-/); fs.rmSync(resolved, { recursive: true, force: true }); });
-  return { root, store, transport, runner, channel, status, reads, writes, models, works, sent, receive };
+  return { root, store, transport, runner, channel, status, reads, writes, models, sent, receive };
 }
 
 const audienceSnapshot = { accountId, source: 'wechat-contacts-live', fetchedAt: new Date().toISOString(), membershipComplete: true, unavailableCount: 0,
@@ -78,7 +72,7 @@ test('audience tools read real IDs with bounded search and label pagination and 
   assert.throws(() => resolveMomentsAudience({ ...audienceSnapshot, membershipComplete: false }, writes[0]));
 });
 
-test('audience access is administrator and account bound in chat, work and owner RPC', async t => {
+test('audience access is administrator and account bound in chat and owner RPC', async t => {
   const f = fixture(t), reads = [];
   f.status.momentsAudienceReady = true;
   f.transport.readMomentsAudience = async (args, signal) => { reads.push(args); signal.throwIfAborted(); return audienceSnapshot; };
@@ -108,7 +102,7 @@ test('shielded publish requires an exact selection receipt and reuses it after r
 });
 test('chat model can invoke the read-only moments tool for the verified administrator', async t => {
   const f = fixture(t); f.receive('看看朋友圈'); await f.channel.whenIdle();
-  assert.equal(f.reads.length, 1); assert.equal(f.works.length, 0); assert(f.models[0].tools.some(tool => tool.name === 'wechat_moments_read'));
+  assert.equal(f.reads.length, 1); assert(f.models[0].tools.some(tool => tool.name === 'wechat_moments_read'));
   assert.equal(f.reads[0].accountId, accountId); assert.equal(f.reads[0].scopeKey, identity([accountId, 'private', 'alice', 'alice']));
   assert(f.sent.some(payload => JSON.stringify(payload).includes('已读取朋友圈')));
 });
@@ -151,18 +145,6 @@ test('revoking administrator during a social read returns no old response', asyn
   const pending = f.channel.moments.read({ action: 'timeline' }, scope, new AbortController().signal); await entered.promise;
   const config = f.store.config.snapshot(f.store.data); config.remote.globalAdminIds = []; f.store.config.commit(config); release.resolve();
   await assert.rejects(pending, error => error.code === 'REMOTE_NOT_AUTHORIZED'); assert.equal(f.sent.length, 0);
-});
-test('work receives the same read capability with the scoped requester', async t => {
-  const f = fixture(t), config = f.store.conversationSettings(accountId, 'private', 'alice');
-  f.store.setConversationSettings(accountId, 'private', 'alice', { ...config, executionMode: 'work' });
-  f.receive('读取朋友圈并整理'); await f.channel.whenIdle();
-  assert.equal(f.works.length, 1); assert.equal(f.reads.length, 1); assert.equal(f.models.length, 0);
-  assert.equal(typeof f.works[0].moments.manageInteractions, 'function');
-  assert.equal(f.reads[0].scopeKey, identity([accountId, 'private', 'alice', 'alice']));
-  assert.equal(f.channel.work.list(scope).jobs[0].state, 'succeeded');
-  const reloaded = new WorkStore(f.store).list(scope)[0];
-  assert.equal(reloaded.state, 'succeeded'); assert.equal(reloaded.operations[0].tool, 'wechat_moments_read');
-  assert.equal(reloaded.operations[0].result.items[0].text, '授权范围内的响应');
 });
 test('owner RPC reads live data without granting another principal or account access', async t => {
   const f = fixture(t), rpc = rpcHandler(createPluginService({ root: f.root, store: f.store, channel: f.channel, runner: f.runner, worker: f.transport }));
@@ -275,15 +257,6 @@ test('write tools do not discard images, fabricate success or accept video as a 
   const bad = momentsWriteTools({ write: async () => { throw new ChannelError('ERR_MOMENTS_WRITE_REJECTED', '微信拒绝操作'); } })[0];
   const rejected = JSON.parse(await bad.execute({ postId: '1', subject: 'speaker' }, exec));
   assert.equal(rejected.ok, false); assert.equal(rejected.code, 'ERR_MOMENTS_WRITE_REJECTED');
-});
-
-test('native photo publishing rejects links, escaped task paths and video files before any upload', async t => {
-  const f = fixture(t), media = workMomentsMedia(f.root), signal = new AbortController().signal;
-  fs.writeFileSync(path.join(f.root, 'video.mp4'), Buffer.from('not-a-photo'));
-  for (const target of ['../outside.jpg', 'https://example.com/image.jpg', 'video.mp4']) await assert.rejects(media.load([target], signal, () => {}));
-  const folder = path.join(f.root, 'redirect'); fs.symlinkSync(os.tmpdir(), folder, 'junction');
-  await assert.rejects(media.load(['redirect/image.jpg'], signal, () => {})); fs.unlinkSync(folder);
-  assert.equal(f.writes.length, 0);
 });
 
 test('changed publish content in the same user request is blocked even while the original call is running', async t => {

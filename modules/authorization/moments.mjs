@@ -3,7 +3,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { ChannelError } from '../../shared/contracts.mjs';
 import { atomicJson } from '../../backend/storage/atomic-json.ts';
-import { workPath } from '../work/policy.mjs';
+import { workPath } from '../paths.mjs';
 import { identity } from '../../backend/storage/keys.mjs';
 import { relatedRecord } from './records.mjs';
 import { ownedPath, unlinkOwned } from './files.mjs';

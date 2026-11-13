@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { ChannelError } from '../../shared/contracts.mjs';
 import { taskViews, taskHistoryVersion } from '../../shared/task-history.mjs';
-import { workPath } from '../work/policy.mjs';
+import { workPath } from '../paths.mjs';
 
 const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const fail = message => { throw new ChannelError('CLEANUP_CHANGED', message); };

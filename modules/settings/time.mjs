@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { ChannelError, validateNaturalSettings, workSettings } from '../../shared/contracts.mjs';
+import { ChannelError, validateNaturalSettings } from '../../shared/contracts.mjs';
 import { TIME_FIELDS, timeSettings, timeValue, validateTimeValues, withTimeValues } from '../../shared/time-settings.mjs';
 import { roleCardSettings } from '../../shared/role-card-settings.mjs';
 import { imageGenerationSettings } from '../../shared/image-generation.mjs';
@@ -26,7 +26,6 @@ function groups(context, payload, signal) {
   };
   add('runtime', 'runtime', '聊天、搜索与朋友圈处理超时', '全局', timeSettings(store.config.section('timeSettings')), value => commit('timeSettings', timeSettings(value)));
   add('role', 'role', '人物角色卡整理', '全局', store.roleCardSettings(), value => channel.personMemory.configure(roleCardSettings(value), store.roleCardSettingsView().revision));
-  add('work', 'work', '工作命令', '全局', store.config.section('work'), value => commit('work', workSettings(value)));
   add('memory', 'memory', '会话与长期记忆保存期限', '全局', store.config.section('memory'), value => commit('memory', value));
   add('image-defaults', 'images', '图片记忆默认保存期限', '全局', store.config.section('imageMemoryDefaults'), value => commit('imageMemoryDefaults', validateImageMemorySettings(value)));
   const defaults = store.config.section('conversationDefaults');
@@ -37,7 +36,7 @@ function groups(context, payload, signal) {
   const image = store.config.section('imageGeneration');
   for (const provider of image.providers) add('provider:' + provider.id, 'provider', '生图接口 · ' + (provider.name || provider.id), '全局', provider, async value => {
     commit('imageGeneration', imageGenerationSettings({ ...image, providers: image.providers.map(row => row.id === provider.id ? value : row) }));
-    await channel.work.imageGeneration.refreshCredential();
+    await channel.imageGeneration.refreshCredential();
   });
   const reschedule = scope => {
     const config = store.conversationSettings(scope.accountId, scope.chatType, scope.peerId);
