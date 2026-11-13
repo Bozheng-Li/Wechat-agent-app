@@ -25,6 +25,35 @@ function MomentsWorkspace({ rpc, status, onNavigate }) {
   const state = useWorkbench(rpc, status.account?.id, 'moments.list', '', ['publishing', 'schedule'].includes(tab) ? 3000 : 0, status.timeSettings);
   const [audience, setAudience] = useState(null), [audienceError, setAudienceError] = useState(false),
     [selection, setSelection] = useState({ blockedLabelIds: [], blockedUserIds: [] });
+  const [publishScope, setPublishScope] = useState('blocked-list'), [scopeSaving, setScopeSaving] = useState(false),
+    [scopeSaved, setScopeSaved] = useState(false), [scopeError, setScopeError] = useState('');
+  const api = useRef(rpc); api.current = rpc;
+  useEffect(() => {
+    const accountId = status.account?.id;
+    if (!accountId) return;
+    let live = true;
+    api.current('moments.publishScope', { accountId }, AbortSignal.timeout(15000)).then(value => {
+      if (live && value?.scope) setPublishScope(value.scope);
+    }).catch(() => { if (live) setScopeError('可见范围读取失败，请刷新后重试；发布时会按原来的范围执行。'); });
+    return () => { live = false; };
+  }, [status.account?.id]);
+  useEffect(() => {
+    if (!scopeSaved) return;
+    const timer = setTimeout(() => setScopeSaved(false), 2500);
+    return () => clearTimeout(timer);
+  }, [scopeSaved]);
+  const choosePublishScope = async scope => {
+    if (scope === publishScope || scopeSaving) return;
+    const previous = publishScope;
+    setPublishScope(scope); setScopeSaving(true); setScopeError(''); setScopeSaved(false);
+    try {
+      const value = await api.current('moments.publishScope', { accountId: status.account.id, scope }, AbortSignal.timeout(15000));
+      if (!value?.scope) throw Error('可见范围未确认保存');
+      setPublishScope(value.scope); setScopeSaved(true);
+    } catch (error) {
+      setPublishScope(previous); setScopeError((error.message || '可见范围保存失败') + '，仍使用原来的范围。');
+    } finally { setScopeSaving(false); }
+  };
   const preview = audiencePreview(audience, selection.blockedLabelIds, selection.blockedUserIds);
   const hasSelection = selection.blockedLabelIds.length + selection.blockedUserIds.length > 0;
   const loadAudience = async () => {
@@ -119,7 +148,23 @@ function MomentsWorkspace({ rpc, status, onNavigate }) {
         {!!photos.length && <div className="wa-moments-photos">{photos.map((photo, index) => <figure key={photo.name + index}><img src={photo.url} alt={photo.name} /><figcaption><span>{photo.name}</span><Button quiet disabled={state.busy} aria-label={'移除图片 ' + photo.name} onClick={() => setPhotos(photos.filter((_, position) => position !== index))}>移除</Button></figcaption></figure>)}</div>}
         <p className="wa-wb-note">支持文字、最多 9 张 PNG/JPEG，每张最多 10 MiB。视频上传尚未接通。</p>
         </section>
-        <AudiencePicker data={audience} error={audienceError} labelIds={selection.blockedLabelIds} userIds={selection.blockedUserIds}
+        <section className="wa-form-section" data-testid="moments-publish-scope">
+          <h3>可见范围</h3>
+          <div className="wa-moments-publish-scope" role="radiogroup" aria-label="可见范围">
+            <label className="wa-wb-check"><input type="radio" name="moments-publish-scope" value="blocked-list"
+              checked={publishScope === 'blocked-list'} disabled={scopeSaving || state.busy || !status.online}
+              onChange={() => choosePublishScope('blocked-list')} /><span>自定义屏蔽名单（默认）</span></label>
+            <label className="wa-wb-check"><input type="radio" name="moments-publish-scope" value="authorized"
+              checked={publishScope === 'authorized'} disabled={scopeSaving || state.busy || !status.online}
+              onChange={() => choosePublishScope('authorized')} /><span>仅授权好友可见</span></label>
+          </div>
+          <p className="wa-wb-note">自定义屏蔽名单（默认）：只屏蔽名单里的标签与联系人；名单为空时好友都可见。</p>
+          <p className="wa-wb-note">仅授权好友可见：自动屏蔽所有未授权好友，只有已授权会话的好友能看到。</p>
+          <p className={scopeError ? 'wa-alert is-error' : 'wa-help'} role={scopeError ? 'alert' : undefined} aria-live="polite">
+            {scopeSaving ? '正在保存可见范围…' : scopeError || (scopeSaved ? '已保存，下次发布生效。' : '切换后立即保存，只影响这个微信账号。')}
+          </p>
+        </section>
+        <AudiencePicker heading="屏蔽名单" data={audience} error={audienceError} labelIds={selection.blockedLabelIds} userIds={selection.blockedUserIds}
           onChange={values => setSelection({ ...selection, ...values })} onRead={loadAudience} busy={state.busy} online={status.online} />
         <div className="wa-form-actions"><span className="wa-help">微信确认后显示发布结果。</span><Button disabled={state.busy || !status.online || (!text.trim() && !photos.length) || !!fileError || preview.missing || hasSelection && audienceError} onClick={async () => {
           const result = await write({ action: 'publish', text, ...(hasSelection ? selection : {}), ...(photos.length ? { images: photos.map(photo => photo.data) } : {}) });

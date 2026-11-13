@@ -10,7 +10,7 @@ const business = [
   'inbound-files', 'inbound-images', 'media-library', 'media-channel-integration', 'memory-retention',
   'memory-scan-performance', 'moments-arrangement', 'moments-automation', 'moments-friend-replies',
   'moments-image-stream', 'moments-interaction-automation', 'moments-interactions', 'moments-likes',
-  'moments-materials', 'moments-person-memory', 'moments-publication-recovery', 'moments-publishing',
+  'moments-materials', 'moments-person-memory', 'moments-publication-recovery', 'moments-publish-scope', 'moments-publishing',
   'moments-read-authorization', 'moments-recency', 'moments-subject', 'moments-tools', 'natural-chat',
   'object-authorization', 'outbound-media', 'owner-cleanup', 'person-role-cards', 'persona-input',
   'quiet-replies', 'received-files', 'reply-context', 'reply-context-budget', 'reply-style', 'role-card-groups',

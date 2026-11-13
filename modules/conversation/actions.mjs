@@ -1,8 +1,8 @@
-import { ChannelError, validateSettings, validateConversationSettings } from "../../shared/contracts.mjs";
+import { ChannelError, validateSettings, validateConversationSettings, validatePublishScope, publishScopeOf } from "../../shared/contracts.mjs";
 import { absoluteDirectory, sameDirectory } from "../../backend/storage/paths.mjs";
 import { preserveTimeValues } from '../../shared/time-settings.mjs';
 
-export const endpoints = ['storage.save', 'natural.resume', 'conversation.configure', 'settings'];
+export const endpoints = ['storage.save', 'natural.resume', 'conversation.configure', 'moments.publishScope', 'settings'];
 
 export async function settingsMutation(
   { store, channel, relocateWorkspace, currentAccount, conversation, paused, assertLive, status, state },
@@ -87,6 +87,17 @@ export async function settingsMutation(
       );
       if (before.memoryWindowChars !== config.memoryWindowChars) channel.maintainMemory(selector);
       break;
+    }
+    case 'moments.publishScope': {
+      const account = currentAccount(payload), before = store.settings(account.id),
+        scope = payload.scope === undefined ? undefined : validatePublishScope(payload.scope);
+      if (scope !== undefined && scope !== publishScopeOf(before)) {
+        signal?.throwIfAborted(); currentAccount(payload);
+        // 可见范围属于账号回复设置，沿用同一份账号设置存储与校验。
+        store.configure(account.id, { ...before, publishScope: scope });
+      }
+      assertLive(signal);
+      return { scope: publishScopeOf(store.settings(account.id)) };
     }
     case 'settings': {
       const account = currentAccount(payload),

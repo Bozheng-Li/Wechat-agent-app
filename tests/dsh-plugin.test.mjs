@@ -12,7 +12,7 @@ import {
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const base = path.join(repo, 'storage/tmp'); fs.mkdirSync(base, { recursive: true });
 const account = { id: 'wxid_owner', nickname: '微信助手' };
-const settings = { enabled: true, privatePeers: ['alice'], groups: ['123@chatroom'], prompt: '' };
+const settings = { enabled: true, privatePeers: ['alice'], groups: ['123@chatroom'], prompt: '', publishScope: 'blocked-list' };
 function temporary(t) {
   const root = fs.mkdtempSync(path.join(base, 'dsh-unit-'));
   t.after(() => { const relative = path.relative(base, fs.realpathSync(root)); assert(!relative.startsWith('..') && !path.isAbsolute(relative) && relative.startsWith('dsh-unit-')); fs.rmSync(root, { recursive: true, force: true }); });
@@ -44,7 +44,7 @@ test('settings validate account-bound private/group ID types without enabling de
 });
 
 test('自动功能开关分别保存，缺省时继续跟随原来的总开关', () => {
-  const legacy = { enabled: true, privatePeers: ['alice'], groups: ['a@chatroom'], prompt: '' };
+  const legacy = { enabled: true, privatePeers: ['alice'], groups: ['a@chatroom'], prompt: '', publishScope: 'blocked-list' };
   assert.deepEqual(validateSettings({ ...legacy, schedules: false, moments: true }),
     { ...legacy, schedules: false, moments: true });
   assert.equal(Object.hasOwn(validateSettings(legacy), 'schedules'), false);
