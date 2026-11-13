@@ -6,7 +6,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // Shared business regressions. Host integration is replaced by app-* and desktop smoke tests.
 const business = [
   'automatic-memory-compaction', 'authorization-backups', 'chat-image-generation', 'contact-classification', 'conversation-preferences', 'data-root',
-  'execution-traces', 'execution-traces-graph', 'image-memory', 'image-reply-grounding',
+  'execution-traces', 'execution-traces-graph', 'execution-traces-skip', 'image-memory', 'image-reply-grounding',
   'inbound-files', 'inbound-images', 'media-library', 'media-channel-integration', 'memory-retention',
   'memory-scan-performance', 'moments-arrangement', 'moments-automation', 'moments-default-audience', 'moments-friend-replies',
   'moments-image-stream', 'moments-interaction-automation', 'moments-interactions', 'moments-likes',
