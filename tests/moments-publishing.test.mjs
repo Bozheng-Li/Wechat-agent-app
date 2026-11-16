@@ -631,3 +631,23 @@ test('model plan and draft tools bind actual administrator and stable message op
   assert.equal(operations[0].tool, 'wechat_moments_plan'); assert.match(operations[0].inputHash, /^[a-f0-9]{64}$/);
   await assert.rejects(f.channel.moments.managePublishing({ action: 'list' }, { ...scope, peerId: 'bob', senderId: 'bob' }, 'forged', signal()), error => error.code === 'REMOTE_NOT_AUTHORIZED');
 });
+
+test('a background result-unknown pause survives a settings save that awaited the audience lookup', async t => {
+  const f = fixture(t); f.configure();
+  const original = f.channel.transport.readMomentsAudience;
+  let entered; const waiting = new Promise(resolve => { entered = resolve; });
+  let release; const gate = new Promise(resolve => { release = resolve; });
+  f.channel.transport.readMomentsAudience = async () => { entered(); await gate; return original(); };
+  const saving = f.manager.configure(accountId, { enabled: true, minGapMinutes: 0, maxPostsPer24Hours: 24,
+    automatic: { enabled: true, content: { useDefaultAudience: false, blockedUserIds: ['alice'], blockedLabelIds: [] } } });
+  await waiting;
+  // A scheduled post whose receipt cannot be verified pauses automatic publishing.
+  const account = f.manager.account(accountId);
+  account.settings.automatic.enabled = false;
+  account.automaticWaitingReason = '上次发布结果不明，自动安排已暂停，请核对回执后再开启';
+  account.revision = 'background-change';
+  release();
+  await assert.rejects(saving, { code: 'MOMENTS_PLAN_CHANGED' });
+  assert.equal(f.manager.account(accountId).settings.automatic.enabled, false, '设置保存不得解除后台暂停');
+  assert.match(f.manager.account(accountId).automaticWaitingReason, /结果不明/);
+});

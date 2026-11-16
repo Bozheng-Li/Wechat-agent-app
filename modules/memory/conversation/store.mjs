@@ -192,7 +192,9 @@ export class ConversationMemory {
   }
   append(input, entry) {
     const doc = this.load(input, { incomingKey: entry.key });
-    if (!doc.seen.includes(entry.key)) {
+    // `seen` is a bounded ring, so a key that already fell out of it is still
+    // deduplicated as long as the stored entries keep the message.
+    if (!doc.seen.includes(entry.key) && !doc.entries.some(row => row.key === entry.key)) {
       doc.entries.push({ ...clone(entry), rememberedAt: this.now() });
       doc.seen.push(entry.key);
       doc.seen = doc.seen.slice(-4000);
@@ -547,6 +549,7 @@ export class ConversationMemory {
     this.compacting.add(key);
     this.errors.delete(key);
     try {
+      const before = memoryText(this.load(input)).length;
       for (let round = 0; round < 4; round++) {
         signal.throwIfAborted();
         const doc = this.load(input),
@@ -599,6 +602,13 @@ export class ConversationMemory {
           this.errors.delete(key);
           return;
         }
+      }
+      // Every round already saved its result, so a window that got shorter is a
+      // partial success: reporting failure made the UI show "压缩失败" and retry
+      // content that was already archived.
+      if (memoryText(this.load(input)).length < before) {
+        this.errors.delete(key);
+        return;
       }
       throw new ChannelError('MEMORY_COMPRESSION_FAILED', '压缩期间仍有新消息超过窗口，剩余内容已保留，将自动继续压缩');
     } catch (error) {

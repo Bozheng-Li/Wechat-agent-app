@@ -13,13 +13,19 @@ export function imageGenerationCredential(provider) {
   return `${IMAGE_GENERATION_CREDENTIAL}_${provider.id.toUpperCase().replaceAll('-', '_')}_${endpoint}`;
 }
 const privateAddress = value => /^(?:127\.|10\.|0\.|169\.254\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.|::1$|::$|f[cd][\da-f]{2}:|fe[89ab][\da-f]:|::ffff:)/i.test(value);
-async function readResponse(response, signal) {
+// Bound the bytes this module buffers: an image may legitimately be larger than
+// the 10 MiB inline limit (it is then sent as a file), but never unbounded.
+const MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
+async function readResponse(response, signal, maxBytes = MAX_RESPONSE_BYTES) {
   const reader = response.body?.getReader();
   if (!reader) throw new ChannelError('IMAGE_GENERATION_RESPONSE', '生图服务返回了空响应');
   const chunks = [];
+  let total = 0;
   try {
     for (;;) {
       signal.throwIfAborted(); const { value, done } = await reader.read(); if (done) break;
+      total += value.length;
+      if (total > maxBytes) throw new ChannelError('IMAGE_GENERATION_RESPONSE', '生图服务的返回内容超过大小上限，已停止读取');
       chunks.push(value);
     }
     return Buffer.concat(chunks);
@@ -151,7 +157,7 @@ export class ImageGenerationService {
       } else throw new ChannelError('IMAGE_GENERATION_EMPTY', '生图 API 没有返回图片数据（base64 和图片链接均为空），未保存图片；本次未自动重复请求');
       current();
       let info;
-      try { info = inspectAssetImage(bytes, { maxBytes: bytes.length }); } catch { throw new ChannelError('IMAGE_GENERATION_RESPONSE', '生图 API 返回的内容不是有效图片'); }
+      try { info = inspectAssetImage(bytes, { maxBytes: MAX_RESPONSE_BYTES }); } catch { throw new ChannelError('IMAGE_GENERATION_RESPONSE', '生图 API 返回的内容不是有效图片'); }
       if (!['image/png', 'image/jpeg'].includes(info.mediaType)) throw new ChannelError('IMAGE_GENERATION_FORMAT', '请将生图 API 的输出格式设为 PNG 或 JPEG，以便原生回传微信');
       return { bytes, mediaType: info.mediaType, extension: info.mediaType === 'image/png' ? '.png' : '.jpg', providerId: provider.id, providerName: provider.name, model: selectedModel,
         sendAs: bytes.length > WORK_ARTIFACT_LIMITS.imageBytes ? 'file' : 'image' };

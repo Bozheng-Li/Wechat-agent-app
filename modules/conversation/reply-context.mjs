@@ -49,7 +49,8 @@ export function recentReplyHistory(history, { maxChars = 10000, maxEntries = 20,
       // before allocating its description. A second image-heavy message must
       // not overdraw the remainder left by the first one.
       const available = remaining - used - 200;
-      if (available < 0) break;
+      // Nothing left to describe: an empty description only spends the reserve.
+      if (available <= 0) break;
       const originalNote = image.description || image.error || '';
       const note = imageSummaryChars === undefined ? originalNote.slice(0, Math.min(1000, available))
         : imageSummary(originalNote, imageSummaryChars, available);

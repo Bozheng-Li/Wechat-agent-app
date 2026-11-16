@@ -83,7 +83,7 @@ export async function loadObservedMedia({ directory, peerId, messageId, resource
       ...(quality === 'thumbnail' ? { qualityNote: '目前只取得微信随消息提供的缩略图，细小文字和画面细节尚未核实。' } : {}) };
   };
   const save = (content, quality) => {
-    if (!Buffer.isBuffer(content) || !content.length || content.length > MAX_IMAGE_BYTES || !['original', 'full'].includes(quality))
+    if (!Buffer.isBuffer(content) || !content.length || content.length > MAX_IMAGE_BYTES || !['original', 'full', 'medium'].includes(quality))
       throw new ChannelError('IMAGE_INVALID', '高清图片内容或大小无效');
     const image = result(content, quality), file = cacheFile(quality), temporary = file + '.' + randomUUID() + '.tmp';
     if (fs.existsSync(file) && !inside(directory, file)) throw new ChannelError('IMAGE_INVALID', '高清图缓存路径无效');
@@ -96,16 +96,22 @@ export async function loadObservedMedia({ directory, peerId, messageId, resource
   const cachedOriginal = readLocal(cacheFile('original'));
   if (cachedOriginal) return result(cachedOriginal, 'original');
   const cachedFull = readLocal(cacheFile('full'));
+  // A medium render is cached on its own: writing it into the "full" slot used to
+  // report quality "full" for a mid-size image and stop every later read from
+  // trying the real original.
+  const cachedMedium = readLocal(cacheFile('medium'));
   if (cachedFull && !preferOriginal) return result(cachedFull, 'full');
   const resources = Array.isArray(descriptor.resources) ? descriptor.resources : [];
-  const deadline = AbortSignal.any([signal, AbortSignal.timeout(20000)]);
+  // A 10 MiB original is up to 160 serial chunks: the budget has to cover the
+  // whole exchange, not just a small preview.
+  const deadline = AbortSignal.any([signal, AbortSignal.timeout(45000)]);
   let lastError;
   const tryUrls = async quality => {
     for (const resource of resources.filter(item => item.quality === quality && /^https?:\/\//i.test(item.reference)).slice(0, 4)) {
       try {
         deadline.throwIfAborted();
         const content = await downloadResource(resource, deadline, fetcher);
-        return quality === 'thumbnail' ? result(content, quality) : save(content, quality === 'medium' ? 'full' : 'original');
+        return quality === 'thumbnail' ? result(content, quality) : save(content, quality);
       } catch (error) { signal.throwIfAborted(); lastError = error; }
     }
     return null;
@@ -118,10 +124,15 @@ export async function loadObservedMedia({ directory, peerId, messageId, resource
     } catch (error) { signal.throwIfAborted(); lastError = error; }
   }
   if (cachedFull) return result(cachedFull, 'full');
+  if (cachedMedium) return result(cachedMedium, 'medium');
   const medium = await tryUrls('medium'); if (medium) return medium;
   const content = readLocal(local);
   if (content) return result(content, descriptor.inlineBytes > 0 && descriptor.kind !== 'emoji' ? 'thumbnail' : 'unknown');
   const thumbnail = await tryUrls('thumbnail'); if (thumbnail) return thumbnail;
+  // Our own deadline, not the server, ended the download: saying "the resource
+  // probably expired" sent the owner looking in the wrong place.
+  if (!signal.aborted && deadline.aborted)
+    throw new ChannelError('IMAGE_DOWNLOAD_TIMEOUT', '高清图下载超时（图片较大或网络较慢），本次未取得原图；请稍后重试或让对方重发');
   if (lastError instanceof ChannelError) throw lastError;
   throw new ChannelError('IMAGE_UNAVAILABLE', '微信高清图暂未取得，也没有可读取的预览图；资源可能过期，请重新发送图片');
 }

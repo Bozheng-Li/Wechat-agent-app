@@ -22,12 +22,14 @@ export class QrLoginManager {
   ) {}
   status() {
     const status = this.backend.status(), online = status.online;
-    const protocolState = (status.diagnostics as { state?: string })?.state;
+    const diagnostics = status.diagnostics as { state?: string; reloginRequired?: boolean };
+    const protocolState = diagnostics?.state;
     return {
       ...this.data,
+      reloginRequired: diagnostics?.reloginRequired === true,
       state:
         this.data.state === "session-ready"
-          ? online ? "online" : protocolState === "reconnecting" || protocolState === "error" || protocolState === "stopped" ? "offline" : "connecting"
+          ? online ? "online" : ["reconnecting", "error", "stopped", "session-expired", "credential-error"].includes(String(protocolState)) ? "offline" : "connecting"
           : this.data.state === "idle" && online ? "online" : this.data.state,
       supported: true,
       running: !!this.child || !!this.starting || !!this.stopping || !!this.accepting,

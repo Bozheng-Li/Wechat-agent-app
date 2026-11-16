@@ -40,15 +40,18 @@ export function historicalTraces(channel) {
     durationMs: entry.finishedAt && entry.startedAt ? Math.max(0, entry.finishedAt - entry.startedAt) : null,
     reason: entry.state === 'skipped' ? traceSnippet(entry.output?.reason || '', 40) || undefined : undefined,
     updatedAt: entry.finishedAt || entry.spec.createdAt, coverage: 'historical', inputPreview: traceSnippet(entry.spec.input.question || entry.spec.input.request || ''),
-    modelCalls: entry.metrics?.length || 0, toolCalls: entry.operations?.length || 0, note: '历史摘要：当时没有记录完整步骤，只展示已保存的输入、结果和调用统计。' });
+    // Only model-call metrics survive in the record; tool steps were never
+    // persisted, so the historical summary must not pretend to count them.
+    modelCalls: entry.metrics?.length || 0, toolCalls: 0, note: '历史摘要：当时只保存了输入、结果和模型调用，未记录工具步骤。' });
   return {
     list: (accountId, { from, to, startAt = Date.parse(from), endAt = Date.parse(to) + 86400000 - 1 }) => entries(accountId).filter(entry => Number.isFinite(entry.spec.createdAt) &&
       entry.spec.createdAt >= startAt && entry.spec.createdAt <= endAt).map(summary),
     get: (accountId, traceId) => {
       const entry = entries(accountId).find(item => id(item.spec) === traceId);
       if (!entry) throw new ChannelError('TRACE_NOT_FOUND', '这条历史摘要不存在或不属于当前账号');
-      const steps = (entry.operations || []).map((operation, index) => ({ id: 'historical-operation-' + index, kind: 'tool',
-        title: operation.tool, startedAt: operation.at || null, state: traceState(operation.result), outputValue: tracePayload(operation.result), metadata: { historical: true } }));
+      // Nothing about individual tool calls was stored at the time, so the
+      // detail view shows the saved input/output instead of invented steps.
+      const steps = [];
       return { trace: { ...summary(entry), inputValue: tracePayload(entry.spec.input), outputValue: tracePayload(entry.output),
         historicalMetrics: tracePayload(entry.metrics || []) }, steps, total: steps.length, offset: 0, limit: steps.length };
     },

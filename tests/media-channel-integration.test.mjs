@@ -75,6 +75,43 @@ test('the model may keep an ordinary reply as text even when sticker tools are a
   assert.equal(f.record().state, 'sent'); assert.equal(f.record().replyMedia, undefined); assert.deepEqual(f.sent[0].message.map(segment => segment.type), ['text']);
 });
 
+test('candidate stickers are pre-read, so a single send call is enough', async t => {
+  const f = fixture(t);
+  let description;
+  f.runner.run = async input => {
+    const send = input.tools.find(tool => tool.name === 'wechat_sticker_send');
+    assert(send); description = send.description;
+    const result = JSON.parse(await send.execute({ assetId: f.asset.id, caption: '好呀' }, { signal: input.signal }));
+    assert.equal(result.ok, true);
+    assert.equal(result.sent, false);
+    return { text: '好呀' };
+  };
+  f.receive('今天天气不错'); await f.channel.whenIdle();
+  assert.match(description, new RegExp(f.asset.name));
+  assert.match(description, new RegExp(f.asset.id));
+  assert.equal(f.record().state, 'sent');
+  assert.deepEqual(f.sent.at(-1).message.map(segment => segment.type), ['text', 'face']);
+});
+
+test('a sticker that was just sent stays available when it still fits', async t => {
+  const f = fixture(t);
+  f.channel.library.configure(accountId, { ...f.channel.library.account(accountId).settings, minGapMessages: 0 });
+  const descriptions = [];
+  f.runner.run = async input => {
+    const send = input.tools.find(tool => tool.name === 'wechat_sticker_send');
+    descriptions.push(send.description);
+    const result = JSON.parse(await send.execute({ assetId: f.asset.id, caption: '好呀' }, { signal: input.signal }));
+    assert.equal(result.ok, true);
+    return { text: '嗯嗯' };
+  };
+  f.receive('今天真开心'); await f.channel.whenIdle();
+  f.receive('还是有点开心'); await f.channel.whenIdle();
+  assert.equal(descriptions.length, 2);
+  // Repeating a sticker is allowed, so the only sticker must still be offered next turn.
+  assert.match(descriptions[1], new RegExp(f.asset.id));
+  assert.deepEqual(f.sent.at(-1).message.map(segment => segment.type), ['text', 'face']);
+});
+
 test('selected image enters history and memory only after the whole reply is server-acknowledged', async t => {
   const f = fixture(t), gate = holdSend(f); f.receive(); await gate.started.promise;
   assert.equal(f.record().state, 'sending'); assert.equal(f.outgoing().length, 0);

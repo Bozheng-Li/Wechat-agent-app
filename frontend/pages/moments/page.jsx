@@ -165,7 +165,7 @@ function MomentsWorkspace({ rpc, status, onNavigate }) {
         {comments && <p className="wa-wb-note">已读取 {comments.items.length} / {comments.visibleCommentEntries} 条可见评论{comments.nextCursor ? ' · 还有下一页' : ''}</p>}
         {!comments && <Empty title="选择一条动态的评论区">从好友动态或我的动态进入，也可以填写动态编号。</Empty>}
         {comments && !comments.items.length && <Empty title="暂无可见评论">微信当前没有返回这条动态的可见评论。</Empty>}
-        {(comments?.items ?? []).map(item => <div className="wa-wb-summary-item wa-moments-comment" key={item.id ?? item.userId + item.createdAt}>
+        {(comments?.items ?? []).map((item, index) => <div className="wa-wb-summary-item wa-moments-comment" key={item.id ?? `${item.userId}:${item.createdAt}:${index}`}>
           <div className="wa-moments-comment-heading"><strong>{item.nickname || item.userId}</strong><small>{item.createdAt ? stamp(item.createdAt) : '时间未知'}{item.replyToCommentId ? ` · 回复 #${item.replyToCommentId}` : ''}{item.deleted ? ' · 已删除' : ''}</small></div>
           <p style={{ whiteSpace: 'pre-wrap' }}>{item.text}</p><Button quiet disabled={state.busy || item.deleted || !item.id || item.userId === status.account.id}
             onClick={() => { setReply(item); setReplyText(''); }}>回复这条评论</Button>

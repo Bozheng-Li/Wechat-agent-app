@@ -459,8 +459,8 @@ export function messageText(message, account, { mode = 'default', persona = empt
   const mentioned = message.message.some((s) => s.type === 'at' && s.data?.qq === account.id);
   if (mentioned) {
     // WeChat keeps the display mention in text as well as the native at-list.
-    // Strip only a leading mention delimited by WeChat's special space.
-    text = text.replace(/^@[^\r\n\u2005]{1,150}\u2005\s*/u, '').trim();
+    // A message can mention several members, so strip the whole leading run.
+    text = text.replace(/^(?:@[^\r\n\u2005]{1,150}\u2005\s*)+/u, '').trim();
   }
   const command = /^\/(?:agent|pc|dsh)(?:\s|$)/i.test(text);
   const nickname =

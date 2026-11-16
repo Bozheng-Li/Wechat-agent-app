@@ -7,7 +7,7 @@ import { ModelClient } from '../../modules/agent/model-client.mjs';
 import { ChannelError, publicError } from '../../shared/contracts.mjs';
 import { describeDataRoot, planSwitch, applySwitch, readLocation, pluginRoot } from '../storage/data-root.mjs';
 
-export async function createDesktopApplication({ dataHome, home = dataHome, dshHome, encryption }) {
+export async function createDesktopApplication({ dataHome, home = dataHome, dshHome, encryption, progress }) {
   const root = path.resolve(dataHome);
   const pointerHome = path.resolve(home);
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
@@ -17,7 +17,11 @@ export async function createDesktopApplication({ dataHome, home = dataHome, dshH
     agentDefaultModel: { currentSelection: () => providers.defaultSelection() },
     capabilities: { vision: true, webSearch: true, nativeWork: false },
   };
-  const application = await startApplication(ctx);
+  progress?.('application');
+  // Yield once so the window can paint this stage before the stores open.
+  await new Promise(resolve => setImmediate(resolve));
+  // Lazy: the shell is usable now, the stores and the WeChat runtime open behind it.
+  const application = await startApplication(ctx, { progress, lazy: true });
   const operations = new Set(); const lifetime = new AbortController(); let closing;
   const call = async (endpoint, payload = {}, signal = new AbortController().signal) => {
     const combined = AbortSignal.any([signal, lifetime.signal]);

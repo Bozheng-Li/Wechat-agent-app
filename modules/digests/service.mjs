@@ -13,8 +13,10 @@ export function reminderView(workbench, task) {
 export function listDigests(workbench, accountId) {
   const data = workbench.disk.load(accountId);
   for (const summary of data.summaries)
-    for (const todo of summary.todos)
-      if (todo.taskId) {
+    // One malformed summary used to throw a TypeError here and take the whole
+    // digest page (and the cleanup preview) down with it.
+    for (const todo of Array.isArray(summary?.todos) ? summary.todos : [])
+      if (todo?.taskId) {
         const task = workbench.channel.scheduler?.data.tasks.find(
           (task) =>
             task.id === todo.taskId &&
@@ -118,7 +120,7 @@ export async function generateDigest(workbench, input, signal) {
 export async function updateDigestTodo(workbench, input, signal) {
   const data = workbench.disk.load(input.accountId),
     summary = data.summaries.find((value) => value.id === input.summaryId),
-    todo = summary?.todos.find((value) => value.id === input.todoId);
+    todo = (Array.isArray(summary?.todos) ? summary.todos : []).find((value) => value?.id === input.todoId);
   if (!todo) fail('DIGEST_NOT_FOUND', '待办不存在');
   const scope = workbench.scope(summary);
   if (input.remind) {

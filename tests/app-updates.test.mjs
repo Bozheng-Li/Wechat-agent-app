@@ -321,6 +321,9 @@ test('blockmap plans copy identical blocks and coalesce changed ones into one ra
   // Malformed blockmaps are rejected instead of being guessed at.
   assert.throws(() => parseBlockmap(Buffer.from('not a blockmap')), { code: 'BLOCKMAP_INVALID' });
   assert.throws(() => parseBlockmap(gzipped({ version: 1, files: [] })), { code: 'BLOCKMAP_INVALID' });
+  // electron-builder emits the version as a string; both spellings must parse.
+  assert.equal(parseBlockmap(gzipped({ version: '2', files: [{ name: 'a.exe', checksums: ['a'.repeat(24)], sizes: [BLOCK] }] })).version, 2);
+  assert.throws(() => parseBlockmap(gzipped({ version: 3, files: [] })), { code: 'BLOCKMAP_INVALID' });
   assert.throws(() => parseBlockmap(gzipped({ version: 2, files: [] })), { code: 'BLOCKMAP_INVALID' });
   assert.throws(() => parseBlockmap(gzipped({ version: 2, files: [{ checksums: [], sizes: [] }] })), { code: 'BLOCKMAP_INVALID' });
   assert.throws(() => parseBlockmap(gzipped({ version: 2, files: [{ checksums: ['a'.repeat(24)], sizes: [0] }] })), { code: 'BLOCKMAP_INVALID' });

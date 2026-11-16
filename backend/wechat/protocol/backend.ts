@@ -47,6 +47,8 @@ export class ProtocolBackend implements Backend {
   private activeHost?: string;
   private activePort?: number;
   private reconnects = 0;
+  /** Set when the saved credentials cannot work again: only a new QR scan helps. */
+  private reloginRequired = false;
   private tx = 0; private rx = 0; private sent = 0; private received = 0;
   private cache!: Cache;
   private messages = new Map<string, BridgeMessage>();
@@ -111,7 +113,7 @@ export class ProtocolBackend implements Backend {
   status(): BackendStatus {
     const transport = this.transport;
     return { mode: this.mode, online: this.online && !!transport?.connected, good: this.online && !!transport?.connected && !this.lastError, hookCount: 0,
-      diagnostics: { state: this.state, account: this.session.publicStatus().account, credentials: this.session.publicStatus(), lastError: this.lastError,
+      diagnostics: { state: this.state, reloginRequired: this.reloginRequired, account: this.session.publicStatus().account, credentials: this.session.publicStatus(), lastError: this.lastError,
         connection: { host: this.activeHost, port: this.activePort, connected: !!transport?.connected, latencyMs: transport?.latencyMs ?? null, connectedAt: transport?.connectedAt, txFrames: this.tx + (transport?.tx ?? 0), rxFrames: this.rx + (transport?.rx ?? 0), reconnects: this.reconnects },
         sync: { lastSyncAt: this.lastSyncAt, lastHeartbeatAt: this.lastHeartbeatAt, intervalMs: this.options.syncIntervalMs },
         cache: { contacts: this.cache.contacts.length, groups: this.cache.groups.length, members: this.cache.members.length, messages: this.messages.size, scope: 'protocol-observed-only' },
@@ -120,6 +122,9 @@ export class ProtocolBackend implements Backend {
   async start() {
     if (this.worker) return;
     if (!this.session.value) { this.lastError = this.session.error; this.setState(this.session.error ? 'credential-error' : 'session-missing'); return; }
+    // A new start follows a fresh login or an explicit owner retry; give the
+    // saved credentials another chance before reporting an expired session.
+    this.reloginRequired = false;
     this.controller = new AbortController(); const signal = this.controller.signal;
     this.worker = this.run(signal).catch(error => { if (!signal.aborted) { this.lastError = error instanceof Error ? error.message : String(error); this.setState('error'); this.log('error', this.lastError); } }).finally(() => { this.worker = undefined; });
   }
@@ -143,6 +148,7 @@ export class ProtocolBackend implements Backend {
         if (signal.aborted) return;
         await this.sync(t);
         c.host = host; c.port = endpoint.port; this.session.save(c);
+        this.reloginRequired = false;
         if (attempts) this.log('info', 'Protocol connection recovered'); attempts = 0;
         let nextSync = Date.now() + this.options.syncIntervalMs;
         let nextHeartbeat = Date.now() + this.options.heartbeatIntervalMs;
@@ -162,7 +168,16 @@ export class ProtocolBackend implements Backend {
         if (!signal.aborted) throw new BridgeError('ERR_CONNECTION_CLOSED', 'Protocol edge closed the connection');
       } catch (error) {
         if (signal.aborted) return;
-        this.lastError = error instanceof Error ? error.message : String(error); this.setState('reconnecting');
+        const code = error instanceof BridgeError ? error.code : (error as { code?: string } | undefined)?.code;
+        this.lastError = error instanceof Error ? error.message : String(error);
+        // Retrying cannot fix an expired or unusable credential: keep the owner
+        // informed instead of reporting a network fault for ever.
+        if (code === 'ERR_SESSION_EXPIRED' || code === 'ERR_CREDENTIAL') {
+          this.reloginRequired = true; this.setState('session-expired');
+          this.log('error', code === 'ERR_SESSION_EXPIRED' ? '微信会话已失效，请重新扫码登录' : '微信登录凭据不可用，请重新扫码登录');
+          return;
+        }
+        this.setState('reconnecting');
         this.log('warn', `${host}:${endpoint.port}: ${this.lastError}`); attempts++; this.reconnects++;
       } finally { this.retireTransport(); }
       try { await sleep(Math.min(this.options.reconnectMs * Math.max(1, Math.floor(attempts / endpoints.length) + 1), 60000), undefined, { signal }); }

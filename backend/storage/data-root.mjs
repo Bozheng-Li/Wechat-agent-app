@@ -71,12 +71,23 @@ function directorySize(directory) {
   return total;
 }
 
+/** True when `child` is `parent` itself or lives anywhere below it. */
+export function withinDirectory(parent, child) {
+  const relative = path.relative(path.resolve(parent), path.resolve(child));
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
 export function locationFile(home) { return path.join(path.resolve(home), LOCATION_FILE); }
 
 /** Tolerant read: a corrupt pointer must never keep the app from starting. */
 export function readLocation(home) {
-  const value = readJSON(locationFile(home));
-  if (!value || typeof value !== 'object' || typeof value.root !== 'string' || !path.isAbsolute(value.root)) return undefined;
+  const file = locationFile(home);
+  if (!fs.existsSync(file)) return undefined;
+  const value = readJSON(file);
+  // The pointer exists but is unusable. Falling back silently hid where the
+  // owner's data really lives and the next switch overwrote the evidence.
+  if (!value || typeof value !== 'object' || typeof value.root !== 'string' || !path.isAbsolute(value.root))
+    return { corrupt: true };
   return {
     root: path.resolve(value.root),
     storeId: typeof value.storeId === 'string' ? value.storeId : undefined,
@@ -133,6 +144,13 @@ export function planSwitch(home, { target, mode, confirm = false }) {
   if (location?.root === resolved) throw new ChannelError('DATA_ROOT_UNCHANGED', '当前已经在使用这个数据目录');
   if (mode !== 'use' && mode !== 'copy') throw new ChannelError('INVALID_REQUEST', '请选择迁移方式');
   const source = location?.root ?? path.resolve(home);
+  if (resolved === source) throw new ChannelError('DATA_ROOT_UNCHANGED', '当前已经在使用这个数据目录');
+  // Copying a directory into itself (or into its own parent) would make the copy
+  // walk its own output forever, so both directions are refused for "copy".
+  if (mode === 'copy' && (withinDirectory(source, resolved) || withinDirectory(resolved, source)))
+    throw new ChannelError(
+      'DATA_ROOT_OVERLAP',
+      '新数据目录不能与当前数据目录互相包含；请选择另一个独立文件夹，否则复制会无限嵌套并写满磁盘');
   const described = describeDataRoot(resolved, { current: source });
   if (described.locked)
     throw new ChannelError('DATA_ROOT_LOCKED', '这个数据目录正被另一个微信 Agent 或 DSH 插件使用，请先退出后再切换');
@@ -144,15 +162,24 @@ export function planSwitch(home, { target, mode, confirm = false }) {
   // One WeChat account owns one set of records, so a directory that holds the
   // same account is the intended way to share data between the two ends. Only a
   // directory that belongs to a different account asks for a second confirmation.
-  if (mode === 'use' && described.hasData && currentAccounts.length && !sharedAccounts.length && !confirm)
+  // Copy is included: writing this account's files into another account's
+  // directory produces a mixed root that no later switch can untangle.
+  if (described.hasData && currentAccounts.length && !sharedAccounts.length && !confirm)
     throw new ChannelError(
       'DATA_ROOT_OTHER_ACCOUNT',
-      `这个目录属于另一个微信账号${otherAccounts[0] ? '（' + otherAccounts[0] + '）' : ''}；如果确实要改用请再确认一次，否则请用一个空目录或与当前账号相同的目录`);
+      mode === 'copy'
+        ? `这个目录属于另一个微信账号${otherAccounts[0] ? '（' + otherAccounts[0] + '）' : ''}；复制会把当前账号的数据写进去形成混合目录，如果确实要复制请再确认一次`
+        : `这个目录属于另一个微信账号${otherAccounts[0] ? '（' + otherAccounts[0] + '）' : ''}；如果确实要改用请再确认一次，否则请用一个空目录或与当前账号相同的目录`);
   return { target: resolved, mode, source, accounts: described.accounts, currentAccounts, sharedAccounts, otherAccounts };
 }
 
 export function applySwitch(home, plan) {
   const location = readLocation(home);
+  // Keep an unreadable pointer next to the new one: it is the only evidence of
+  // where the data used to live.
+  if (location?.corrupt) {
+    try { fs.renameSync(locationFile(home), locationFile(home) + '.corrupt'); } catch { /* Writing the new pointer matters more. */ }
+  }
   return writeLocation(home, {
     root: location?.root ?? path.resolve(home),
     storeId: location?.storeId,
@@ -165,6 +192,9 @@ function copyTree(source, target, { skip } = {}) {
   const stack = [['', source]];
   while (stack.length) {
     const [relative, current] = stack.pop();
+    // A recursive tree can only be produced by a mistake (a nested target or a
+    // reparse point); refuse instead of filling the disk.
+    if (relative.split(path.posix.sep).length > 64) throw new ChannelError('DATA_ROOT_OVERLAP', '目录层级过深，已停止复制');
     const destination = relative ? path.join(target, relative) : target;
     fs.mkdirSync(destination, { recursive: true, mode: 0o700 });
     for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
@@ -172,7 +202,7 @@ function copyTree(source, target, { skip } = {}) {
       const from = path.join(current, entry.name), to = path.join(destination, entry.name);
       if (entry.isDirectory()) stack.push([path.posix.join(relative, entry.name), from]);
       else if (entry.isSymbolicLink()) continue;
-      else { fs.copyFileSync(from, to); bytes += fs.statSync(to).size; }
+      else { fs.copyFileSync(from, to); bytes += fs.statSync(to).size; if (bytes > MAX_BYTES) throw new ChannelError('DATA_ROOT_TOO_LARGE', '数据目录超过 8 GB，已停止复制'); }
     }
   }
   return bytes;
@@ -185,21 +215,32 @@ function copyTree(source, target, { skip } = {}) {
 export function resolveDataRoot(home) {
   const location = readLocation(home);
   if (!location) return { root: path.resolve(home), source: 'default' };
+  if (location.corrupt) return { root: path.resolve(home), source: 'default', corrupted: true };
   if (!location.pending) return { root: location.root, storeId: location.storeId, source: 'pointer' };
   const { mode, target, source: from } = location.pending;
+  const destination = typeof target === 'string' && path.isAbsolute(target) ? path.resolve(target) : undefined;
+  const origin = typeof from === 'string' && path.isAbsolute(from) ? from : location.root;
+  // Only a directory this run created may be removed again on failure; an
+  // existing directory belongs to the owner and is never deleted.
+  const created = destination ? !fs.existsSync(destination) : false;
   try {
-    if (typeof target !== 'string' || !path.isAbsolute(target)) throw new ChannelError('INVALID_STORAGE_PATH', '数据目录路径无效');
-    const described = describeDataRoot(target, { current: location.root });
+    if (!destination) throw new ChannelError('INVALID_STORAGE_PATH', '数据目录路径无效');
+    if (destination === path.parse(destination).root) throw new ChannelError('INVALID_STORAGE_PATH', '不能使用磁盘根目录');
+    if (mode === 'copy' && (withinDirectory(origin, destination) || withinDirectory(destination, origin)))
+      throw new ChannelError('DATA_ROOT_OVERLAP', '新数据目录与当前数据目录互相包含，已停止复制');
+    const described = describeDataRoot(destination, { current: location.root });
     if (described.locked) throw new ChannelError('DATA_ROOT_LOCKED', '目标数据目录正被另一个实例使用');
     if (mode === 'copy') {
-      const origin = typeof from === 'string' && path.isAbsolute(from) ? from : location.root;
       if (!fs.existsSync(origin)) throw new ChannelError('DATA_ROOT_SOURCE_MISSING', '原数据目录不存在');
-      copyTree(origin, path.resolve(target), { skip: (name) => VOLATILE.has(name) });
-    } else fs.mkdirSync(path.resolve(target), { recursive: true, mode: 0o700 });
-    fs.mkdirSync(path.resolve(target), { recursive: true, mode: 0o700 });
-    writeLocation(home, { root: target, storeId: described.storeId });
-    return { root: path.resolve(target), source: mode === 'copy' ? 'copied' : 'switched', storeId: described.storeId };
+      copyTree(origin, destination, { skip: (name) => VOLATILE.has(name) });
+    } else fs.mkdirSync(destination, { recursive: true, mode: 0o700 });
+    fs.mkdirSync(destination, { recursive: true, mode: 0o700 });
+    writeLocation(home, { root: destination, storeId: described.storeId });
+    return { root: destination, source: mode === 'copy' ? 'copied' : 'switched', storeId: described.storeId };
   } catch (error) {
+    if (created && destination) {
+      try { fs.rmSync(destination, { recursive: true, force: true }); } catch { /* Keep the failure report. */ }
+    }
     writeLocation(home, {
       root: location.root,
       storeId: location.storeId,

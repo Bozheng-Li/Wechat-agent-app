@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Empty, PageHead, Search } from '../../components/page-ui.jsx';
+import { LoadingBar } from '../../components/loading.jsx';
 import { Button } from '../../components/button.jsx';
 import { Glyph } from '../../components/glyph.jsx';
 import { emptyRoleCard } from '../../../shared/role-card.mjs';
@@ -143,7 +144,7 @@ export function RoleCardsPage({ rpc, status, onNavigate }) {
         {listError && <p className="wa-alert is-error" role="alert">{listError}</p>}
         {!selected && error && <p className="wa-alert is-error" role="alert">{error}</p>}
         {!selected && notice && <p className="wa-alert is-success" role="status">{notice}</p>}
-        {listing ? <Empty icon="people" title="正在读取人物角色卡" description="正在载入这个账号认识的人物…" /> : !people.length ?
+        {listing ? <LoadingBar label="正在读取人物角色卡…" /> : !people.length ?
           <Empty icon="person" title="正在从聊天中认识人物" description="整理出称呼、喜好等实际资料后才创建角色卡；只有姓名或发言记录的人暂不创建。">
             <Button icon="refresh" disabled={busy} onClick={() => run('memory.role.refresh', { accountId }, '已安排后台整理已有聊天，人物列表会自动刷新。')}>整理已有聊天</Button>
           </Empty> : !filtered.length ? <Empty icon="search" title="没有找到这个人物" description="换一个姓名、标签、称呼或喜好试试。">
@@ -176,7 +177,9 @@ export function RoleCardsPage({ rpc, status, onNavigate }) {
       <div className="wa-role-dialog-body">
         {error && <p className="wa-alert is-error" role="alert">{error}</p>}
         {notice && <p className="wa-alert is-success" role="status">{notice}</p>}
-        {!doc ? <p className="wa-help">{error ? <Button onClick={() => { setError(''); void load().catch(failure => setError(failure.message)); }}>重新读取资料</Button> : '正在读取人物资料…'}</p> :
+        {!doc ? (error
+          ? <p className="wa-help"><Button onClick={() => { setError(''); void load().catch(failure => setError(failure.message)); }}>重新读取资料</Button></p>
+          : <LoadingBar label="正在读取人物资料…" rows={2} />) :
           <RoleCardDetails doc={doc} draft={draft} editing={editing} busy={busy} dirty={dirty} status={status}
             onChange={(field, value) => setDraft(previous => ({ ...previous, [field]: value }))}
             onRefresh={() => run('memory.role.refresh', scope, '已安排后台更新，聊天继续进行；整理完成后这里会自动刷新。')}

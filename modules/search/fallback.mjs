@@ -1,7 +1,9 @@
 import { ChannelError } from '../../shared/contracts.mjs';
 import { searchFailure } from './errors.mjs';
 
-const names = { dsh: 'DeepSeek 原生搜索', tavily: 'Tavily 搜索' };
+const names = { deepseek: 'DeepSeek 原生搜索', tavily: 'Tavily 搜索' };
+/** `dsh` is the historical alias for the DeepSeek adapter; results use `deepseek`. */
+export const normalizeSearchProvider = value => (value === 'dsh' ? 'deepseek' : value);
 
 async function attemptSearch(search, provider, request, signal, timeoutMs, requireCredential) {
   signal?.throwIfAborted();
@@ -25,14 +27,15 @@ async function attemptSearch(search, provider, request, signal, timeoutMs, requi
 
 /** A configured primary and its one alternate; never retry or change a query. */
 export async function searchWithFallback({ primary, search, request, signal, timeoutMs = 45000, assertAllowed = () => {} }) {
-  if (!Object.hasOwn(names, primary)) throw new ChannelError('INVALID_SEARCH_CONFIG', '请选择 DeepSeek 原生搜索或 Tavily。');
+  const selected = normalizeSearchProvider(primary);
+  if (!Object.hasOwn(names, selected)) throw new ChannelError('INVALID_SEARCH_CONFIG', '请选择 DeepSeek 原生搜索或 Tavily。');
   if (!Number.isFinite(timeoutMs) || timeoutMs < 1) throw new TypeError('Search timeout must be positive');
   signal?.throwIfAborted();
-  const providers = [primary, primary === 'dsh' ? 'tavily' : 'dsh'];
+  const providers = [selected, selected === 'tavily' ? 'deepseek' : 'tavily'];
   const query = structuredClone(request), attempts = [], failures = [];
   let empty;
-  const result = (value, provider) => ({ ...value, provider, primaryProvider: primary,
-    fallbackUsed: provider !== primary, fallbackAttempted: attempts.length > 1, attempts: structuredClone(attempts) });
+  const result = (value, provider) => ({ ...value, provider, primaryProvider: selected,
+    fallbackUsed: provider !== selected, fallbackAttempted: attempts.length > 1, attempts: structuredClone(attempts) });
   for (const [index, provider] of providers.entries()) {
     signal?.throwIfAborted(); assertAllowed();
     try {
@@ -57,5 +60,5 @@ export async function searchWithFallback({ primary, search, request, signal, tim
   if (empty) return result(empty.value, empty.provider);
   throw new ChannelError(failures[0].failure.code,
     failures.map(({ provider, failure }) => `${names[provider]}：${failure.message}`).join('；'),
-    { search: { primaryProvider: primary, provider: null, fallbackUsed: false, fallbackAttempted: true, attempts } });
+    { search: { primaryProvider: selected, provider: null, fallbackUsed: false, fallbackAttempted: true, attempts } });
 }

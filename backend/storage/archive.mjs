@@ -91,6 +91,7 @@ export function writeArchiveSnapshot(store, view, directory, expectedRevision) {
 
 export function withSourceLocks(store, views, operation) {
   const releases = [];
+  let result, primary;
   try {
     for (const view of [...views].sort((a, b) => a.key.localeCompare(b.key))) {
       const directory = store.data.conversations[view.key].directory;
@@ -110,16 +111,22 @@ export function withSourceLocks(store, views, operation) {
           '源会话记录已被其他实例更新或仍有未保存状态，未迁移；请重新启动应用读取最新记录'
         );
     }
-    return operation();
+    result = operation();
+  } catch (error) {
+    primary = error;
+    throw error;
   } finally {
-    let error;
+    let failure;
     for (const release of releases.reverse()) {
       try {
         release();
-      } catch (failure) {
-        error ??= failure;
+      } catch (error) {
+        failure ??= error;
       }
     }
-    if (error) throw error;
+    // A lock that cannot be released must not replace the real reason the
+    // operation failed (a full disk used to be reported as a lock problem).
+    if (failure && !primary) throw failure;
   }
+  return result;
 }

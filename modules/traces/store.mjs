@@ -12,6 +12,12 @@ const hash = value => createHash('sha256').update(value).digest('hex');
 const validId = id => typeof id === 'string' && /^\d{8}-[a-f0-9]{32}$/.test(id);
 const dateOf = id => id.slice(0, 4) + '-' + id.slice(4, 6) + '-' + id.slice(6, 8);
 const dayOf = time => new Date(time).toISOString().slice(0, 10);
+/** Calendar day in the owner's local zone; UTC days cut the morning off in +08:00. */
+const localDay = time => {
+  const date = new Date(time);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+};
+const localMidnight = day => new Date(day + 'T00:00:00').getTime();
 const error = (code, message) => new ChannelError(code, message);
 const json = value => JSON.stringify(value, null, 2) + '\n';
 const TRACE_PRESETS = new Set(['all', 'meaningful']);
@@ -182,8 +188,12 @@ export class ExecutionTraces {
       if (state && Object.hasOwn(TRACE_STATES, state)) {
         if (row.state !== state) this.event(context, TRACE_STATES[state], note ? { reason: note } : undefined, 'lifecycle');
         row.state = state;
-        if (state === 'running') row.startedAt ??= this.now();
-        if (!TRACE_ACTIVE.has(state)) row.finishedAt = this.now();
+        // A reopened trace must not keep the previous run's end time, which would
+        // report a "running" trace with a duration covering the whole pause.
+        if (TRACE_ACTIVE.has(state)) {
+          if (state === 'running') row.startedAt ??= this.now();
+          delete row.finishedAt;
+        } else row.finishedAt = this.now();
       }
       if (state === 'skipped' || row.state === 'skipped') {
         const detail = explicit || skipReason(output?.reason) || skipReason(output?.skipReason) || skipReason(output?.error);
@@ -288,10 +298,15 @@ export class ExecutionTraces {
       !TRACE_PRESETS.has(preset) ||
       typeof query !== 'string' || query.length > 200 || !Number.isInteger(offset) || offset < 0 || !Number.isInteger(limit) || limit < 1 || limit > 100)
       throw error('TRACE_FILTER_INVALID', '轨迹筛选或分页条件不正确');
-    from ??= dayOf(this.now() - 6 * 86400000); to ??= dayOf(this.now());
+    // The default window is "the last seven days" as the owner sees them, so it is
+    // built from local dates; callers that pass their own range keep the previous
+    // UTC-midnight interpretation.
+    const defaultFrom = from === undefined, defaultTo = to === undefined;
+    from ??= localDay(this.now() - 6 * 86400000); to ??= localDay(this.now());
     if (![from, to].every(value => /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value)) && dayOf(Date.parse(value)) === value) || from > to || Date.parse(to) - Date.parse(from) > 366 * 86400000)
       throw error('TRACE_DATE_INVALID', '请选择一年以内的有效日期范围');
-    startAt ??= Date.parse(from); endAt ??= Date.parse(to) + 86400000 - 1;
+    startAt ??= defaultFrom ? localMidnight(from) : Date.parse(from);
+    endAt ??= (defaultTo ? localMidnight(to) : Date.parse(to)) + 86400000 - 1;
     if (![startAt, endAt].every(Number.isSafeInteger) || startAt > endAt || endAt - startAt > 367 * 86400000 ||
       Math.abs(startAt - Date.parse(from)) > 86400000 || Math.abs(endAt - Date.parse(to) - 86400000 + 1) > 86400000)
       throw error('TRACE_DATE_INVALID', '日期范围与本地时区不一致，请重新选择');

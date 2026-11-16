@@ -2,7 +2,7 @@ import { createConnection, type Socket } from 'node:net';
 import { randomBytes } from 'node:crypto';
 import { BridgeError } from '@napcat-wechat/protocol';
 import type { Credential } from "./session.js";
-import { decodeFrame, encodeFrame, MAGIC, MAX_FRAME, RESPONSE, WIRE } from "./wire.js";
+import { compactStatus, decodeFrame, encodeFrame, MAGIC, MAX_FRAME, RESPONSE, WIRE } from "./wire.js";
 
 interface Pending { cmd: number; resolve: (body: Buffer) => void; reject: (error: Error) => void; timer: NodeJS.Timeout; at: number }
 export class LonglinkTransport {
@@ -47,11 +47,22 @@ export class LonglinkTransport {
       const length = this.buffer.readUInt32BE();
       if (length < 16 || length > MAX_FRAME) throw new BridgeError('ERR_PROTOCOL', 'Invalid TCP frame length');
       if (this.buffer.length < length) return;
-      const frame = this.buffer.subarray(0, length); this.buffer = this.buffer.subarray(length);
+      // Copy: a subarray would keep pointing at the buffer that the next
+      // Buffer.concat reallocates, so an async handler could read moved bytes.
+      const frame = Buffer.from(this.buffer.subarray(0, length)); this.buffer = this.buffer.subarray(length);
       if (frame.readUInt32BE(4) !== MAGIC) throw new BridgeError('ERR_PROTOCOL', 'Invalid TCP frame magic');
       this.rx++; this.lastRxAt = Date.now();
       const seq = frame.readUInt32BE(12), pending = this.pending.get(seq);
-      if (!pending || frame.readUInt32BE(8) !== (RESPONSE | WIRE[pending.cmd])) { this.notify(); continue; }
+      if (!pending || frame.readUInt32BE(8) !== (RESPONSE | WIRE[pending.cmd])) {
+        // An expired session arrives as a compact status frame that matches no
+        // request; dropping it silently would leave callers to time out with
+        // "delivery unknown" instead of asking the owner to scan the QR code.
+        if (compactStatus(frame) === -13) {
+          const error = new BridgeError('ERR_SESSION_EXPIRED', '微信会话已失效，请重新扫码登录', { ret: -13 });
+          this.failPending(error); this.close(); throw error;
+        }
+        this.notify(); continue;
+      }
       clearTimeout(pending.timer); this.pending.delete(seq);
       try {
         const material = this.frameMaterial();

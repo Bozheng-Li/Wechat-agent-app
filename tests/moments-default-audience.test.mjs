@@ -67,7 +67,7 @@ function publishingFixture(t) {
   const defaults = (blockedUserIds, blockedLabelIds) => store.configure(accountId,
     { ...store.settings(accountId), defaultBlockedUserIds: blockedUserIds, defaultBlockedLabelIds: blockedLabelIds });
   t.after(async () => { await manager.close(); });
-  return { store, channel, manager, writes, defaults };
+  return { store, channel, manager, writes, defaults, audience };
 }
 
 test('账号设置默认没有屏蔽名单，编号校验并去重后保存', () => {
@@ -154,4 +154,16 @@ test('提交时按实时通讯录裁剪默认名单，失效编号不再阻断�
   assert.deepEqual(f.writes[1].query.blockedUserIds, []);
   assert.deepEqual(f.writes[1].query.blockedLabelIds, []);
   assert.equal(f.manager.list(accountId).runs.find(row => row.id === stale.id).state, 'published');
+});
+
+test('名单不完整的标签按已知成员逐个屏蔽，不会把标签里的人变成可见', async t => {
+  const f = publishingFixture(t);
+  // 标签 2 在实时快照里丢了一个成员：不能作为标签提交，但已知成员必须保持屏蔽。
+  f.audience.labels.push({ id: '2', name: '家人', userIds: ['bob'], memberCount: 2 });
+  f.defaults(['ghost'], ['2']);
+  const run = await f.manager.preview(accountId, { useDefaultAudience: true }, 'incomplete-label', signal());
+  await f.manager.publishDraft(accountId, run.id, signal());
+  assert.deepEqual(f.writes[0].query.blockedLabelIds, []);
+  assert.deepEqual(f.writes[0].query.blockedUserIds, ['bob']);
+  assert.equal(f.manager.list(accountId).runs.find(row => row.id === run.id).state, 'published');
 });

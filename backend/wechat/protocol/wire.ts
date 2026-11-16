@@ -105,12 +105,16 @@ export function encodeFrame(cmd: number, pt: Buffer, uin: number, token: string,
 }
 function decodeBodyFrame(frame: Buffer, key?: Buffer, s08?: Buffer, expectedRequest?: { uin: number; cmd: number; checksum: number; responseChecksum?: boolean }): { cmd: number; seq: number; uin: number; innerCmd: number; body: Buffer } {
   const selected = material(key, s08);
-  if (frame.length < 43 || frame.readUInt32BE(0) !== frame.length || frame.readUInt32BE(4) !== MAGIC) fail('Invalid longlink frame');
+  // A compact status frame is only 23 bytes long, so it must be recognised before
+  // the 43-byte body-frame gate: otherwise an expired session is reported as a
+  // protocol error and the reconnect loop hides it forever.
+  if (frame.length < 23 || frame.readUInt32BE(4) !== MAGIC) fail('Invalid longlink frame');
   const status = compactStatus(frame);
   if (status !== undefined) {
     if (status === -13) throw new BridgeError('ERR_SESSION_EXPIRED', '微信会话已失效，请重新扫码登录', { ret: status });
     throw new BridgeError('ERR_PROTOCOL', `Longlink compact status ${status}`, { ret: status });
   }
+  if (frame.length < 43 || frame.readUInt32BE(0) !== frame.length) fail('Invalid longlink frame');
   const b = frame.subarray(16), headerLength = b[1] >> 2;
   if (headerLength < 26 || headerLength > b.length || ![0xbf, 0xbe].includes(b[0])) fail('Invalid longlink body header');
   const uin = b.readUInt32BE(7); let i = 26;

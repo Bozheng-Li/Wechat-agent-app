@@ -291,7 +291,10 @@ export class MomentsInteractions {
   start(accountId, id, revision, signal, assertAllowed = () => {}, scope) {
     const context = this.context(accountId, scope); this.check(context, signal, assertAllowed);
     const existing = this.record(context, id);
-    if (existing.state !== 'draft' && existing.state !== 'generating') return this.view(existing);
+    // Anything that is not a draft is already in flight or finished: report the
+    // current state instead of failing the "revision changed" check, which told the
+    // owner to refresh a run that was simply still generating.
+    if (existing.state !== 'draft') return this.view(existing);
     const record = this.draft(context, id, revision), rows = record.rows.filter(row => row.selected);
     if (!rows.length || rows.length > 20) failure('MOMENTS_INTERACTION_INVALID', '请先选择本轮要互动的 1–20 条动态');
     if (interactionHasComment(record.options.action) && rows.some(row => row.comment.state === 'pending' && !row.commentText && !row.commentSkipReason))

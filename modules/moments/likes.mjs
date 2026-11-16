@@ -8,13 +8,22 @@ import { momentsLikeSettings, momentsLikeUserId } from '../../shared/moments-lik
 import { workPath } from '../paths.mjs';
 import { readMomentsWithMemory } from './read.mjs';
 import { assertPersonAuthorized } from '../../shared/authorization.mjs';
+import { momentsLocalParts } from '../../shared/moments-publishing.mjs';
 
 const hash = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
 const timestamp = value => Number.isSafeInteger(value) && value >= 0 && value <= 8640000000000000 - 8 * 3600000;
 const recordStates = new Set(['sending', 'liked', 'unknown', 'rejected', 'skipped']);
 const runStates = new Set(['running', 'completed', 'cancelled', 'failed', 'interrupted']);
-const dateInChina = at => new Date(at + 8 * 3600000).toISOString().slice(0, 10);
+const dateIn = (at, timezone) => {
+  try {
+    const { year, month, day } = momentsLocalParts(at, timezone);
+    return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+  } catch {
+    // An invalid zone in the publishing plan must not break the like quota.
+    return new Date(at + 8 * 3600000).toISOString().slice(0, 10);
+  }
+};
 
 /** Selected friends only. Every attempted post is durably consumed before submission. */
 export class MomentsLikes {
@@ -60,8 +69,18 @@ export class MomentsLikes {
       throw new ChannelError('ACCOUNT_CHANGED', '微信账号、连接或运行状态已变化，未继续自动点赞');
   }
   rule(accountId) { return (typeof accountId === 'string' ? this.data.accounts[hash(accountId)] : undefined) ?? { accountId, settings: momentsLikeSettings(), enabledAt: 0, nextRunAt: 0, revision: '' }; }
+  /** The like quota follows the publishing plan's zone, not a hard-coded +08:00. */
+  timezone(accountId) {
+    try {
+      const timezone = this.channel.momentsAutomation?.publishing?.account?.(accountId)?.settings?.automatic?.timezone;
+      return typeof timezone === 'string' ? timezone : 'Asia/Shanghai';
+    } catch {
+      return 'Asia/Shanghai';
+    }
+  }
   today(accountId) {
-    const date = dateInChina(this.now()), records = Object.values(this.data.records).filter(record => record.accountId === accountId && record.attemptedAt !== null && dateInChina(record.attemptedAt) === date);
+    const timezone = this.timezone(accountId), date = dateIn(this.now(), timezone),
+      records = Object.values(this.data.records).filter(record => record.accountId === accountId && record.attemptedAt !== null && dateIn(record.attemptedAt, timezone) === date);
     return { date, attempted: records.length, liked: records.filter(record => record.state === 'liked' && !record.alreadyLiked).length,
       remaining: Math.max(0, this.rule(accountId).settings.maxLikesPerDay - records.length) };
   }

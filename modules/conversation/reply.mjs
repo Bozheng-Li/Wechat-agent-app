@@ -215,7 +215,7 @@ export async function processReply(channel, item) {
           (value) => matches(value, record) && value.state === 'sent' && value.replyMedia
         );
         const sinceMedia = lastMedia
-          ? history.filter((entry) => entry.direction === 'incoming' && entry.observedAt > lastMedia.updatedAt).length +
+          ? history.filter((entry) => entry.direction === 'incoming' && entry.observedAt > (lastMedia.sentAt ?? lastMedia.updatedAt)).length +
             1
           : Infinity;
         const requestedImage = /表情包|发(?:一)?(?:张|个).{0,12}(?:图|表情)|配图|图片回复/u.test(item.text);
@@ -241,7 +241,8 @@ export async function processReply(channel, item) {
                   },
                 });
               };
-          const options = { excludeIds: lastMedia?.replyMedia?.id ? [lastMedia.replyMedia.id] : [], random: channel.random,
+          // Repeating a sticker that fits again is fine; only the spacing rule applies.
+          const options = { random: channel.random,
             explicitRequest: requestedImage, cooldown: sinceMedia < library.settings.minGapMessages };
           // A configured 生图 API is usable from ordinary chat, not only from the
           // removed work mode: the picture joins this reply.
@@ -250,8 +251,23 @@ export async function processReply(channel, item) {
           if (generation?.enabled && generation.credentialConfigured)
             tools.push(imageGenerationTool({ imageGeneration: channel.imageGeneration, library: channel.library,
               scope, select: selectMedia, assertAllowed: assertMediaAllowed }));
-          if (channel.library.search(record.accountId, '', { kind: 'sticker', limit: 1 }).length)
-            tools.push(...stickerReplyTools(channel.library, scope, assertMediaAllowed, selectMedia, options));
+          const stickerPool = channel.library.search(record.accountId, '', { kind: 'sticker', limit: 40 });
+          if (stickerPool.length) {
+            // Show a few concrete stickers in the tool description: a model that has to
+            // search first almost always gives up and replies with text only.
+            const favorites = stickerPool.filter(asset => asset.nativeSticker?.favorite);
+            const pool = favorites.length ? favorites : stickerPool;
+            const shuffle = typeof channel.random === 'function' ? channel.random : Math.random;
+            const shuffled = [...pool];
+            for (let index = shuffled.length - 1; index > 0; index -= 1) {
+              const pick = Math.floor(Math.min(0.999999, shuffle()) * (index + 1));
+              [shuffled[index], shuffled[pick]] = [shuffled[pick], shuffled[index]];
+            }
+            const candidates = shuffled
+              .slice(0, 4)
+              .map(asset => ({ id: asset.id, name: asset.name, usage: asset.usage || '', description: asset.description || '' }));
+            tools.push(...stickerReplyTools(channel.library, scope, assertMediaAllowed, selectMedia, { ...options, candidates }));
+          }
           if ((requestedImage || sinceMedia >= library.settings.minGapMessages) && channel.library.search(record.accountId, '', { kind: 'image', limit: 1 }).length)
             tools.push(mediaReplyTool(channel.library, scope, assertMediaAllowed, selectMedia, { ...options, imagesOnly: true }));
         }
@@ -584,7 +600,9 @@ export async function processReply(channel, item) {
       details.delivery === 'unknown' ||
       (record.sendAttempted && !['rejected', 'not-sent', 'partially-acknowledged'].includes(details.delivery));
     const cancelled =
-      replySignal.aborted ||
+      // A model timeout aborts the signal, but it is a failure, not a user
+      // cancellation: recording it as cancelled hid it from retry backoff.
+      (replySignal.aborted && replySignal.reason?.code !== 'MODEL_TIMEOUT') ||
       ['AUTH_CHANGED', 'NATURAL_PAUSE', 'NATURAL_CONTEXT_CHANGED'].includes(error?.code);
     const failureMessage = publicError(error, '').message;
     channel.store.update(record, {

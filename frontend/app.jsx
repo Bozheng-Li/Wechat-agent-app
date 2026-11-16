@@ -1,15 +1,19 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { WechatPanel } from './panel.jsx';
+import { BootScreen, useBootGate } from './boot-screen.jsx';
+import { TopProgress } from './components/loading.jsx';
+import { track } from './busy.mjs';
 
 const connection = { rpc: { call(_channel, endpoint, payload, signal) {
   signal?.throwIfAborted();
   const id = crypto.randomUUID();
-  return new Promise((resolve, reject) => {
+  // Counted here so every page gets the same "still loading" feedback.
+  return track(new Promise((resolve, reject) => {
     const cancel = () => { window.wechatApp.cancel(id); reject(signal.reason); };
     signal?.addEventListener('abort', cancel, { once: true });
     window.wechatApp.request(id, endpoint, payload).then(resolve, reject).finally(() => signal?.removeEventListener('abort', cancel));
-  });
+  }));
 } } };
 let snapshot = { status: 'idle', value: null }, pending;
 const listeners = new Set();
@@ -32,4 +36,12 @@ document.addEventListener('click', event => {
   if (!link || !/^https?:/i.test(link.href)) return;
   event.preventDefault(); void window.wechatApp.openExternal(link.href).catch(() => {});
 });
-createRoot(document.getElementById('root')).render(<WechatPanel connection={connection} catalog={catalog} />);
+// The window is visible long before the data layer is, so the panel waits behind a
+// startup screen instead of racing the first RPCs (which used to time out after 10s).
+function Shell() {
+  const { ready, boot } = useBootGate();
+  if (!ready) return <BootScreen {...boot} />;
+  return <><TopProgress /><WechatPanel connection={connection} catalog={catalog} /></>;
+}
+
+createRoot(document.getElementById('root')).render(<Shell />);

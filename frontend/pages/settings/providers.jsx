@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { call } from '../../shared/rpc.mjs';
 import { Field } from '../../components/form-ui.jsx';
+import { LoadingBar } from '../../components/loading.jsx';
 import { Button } from '../../components/button.jsx';
 import { Glyph } from '../../components/glyph.jsx';
 
@@ -18,7 +19,7 @@ const presets = [
 ];
 
 const blankModel = () => ({ id: '', name: '', vision: false, efforts: '' });
-const blankDraft = () => ({ id: '', name: '', baseURL: '', stream: true, requiresKey: true, models: [blankModel()] });
+const blankDraft = () => ({ id: '', name: '', baseURL: '', stream: true, requiresKey: true, apiFormat: 'chat', models: [blankModel()] });
 
 const providerDraft = provider => ({
   id: provider.id,
@@ -26,6 +27,7 @@ const providerDraft = provider => ({
   baseURL: provider.baseURL,
   stream: provider.stream !== false,
   requiresKey: provider.requiresKey !== false,
+  apiFormat: provider.apiFormat === 'responses' ? 'responses' : 'chat',
   models: provider.models.length
     ? provider.models.map(model => ({
         id: model.id,
@@ -401,10 +403,18 @@ export function ProviderSettings({ connection, catalog }) {
             onToggle={event => setExpanded(event.currentTarget.open)}>
             <summary>自定义设置{draft.models.filter(model => model.id.trim()).length ? ` · ${draft.models.filter(model => model.id.trim()).length} 个模型` : ''}</summary>
             <Field label="API 地址" id="wa-provider-url"
-              help="兼容 OpenAI Chat Completions 的根地址；本机服务可以使用 http://localhost。">
+              help="服务根地址（不要带 /chat/completions 或 /responses）；本机服务可以使用 http://localhost。">
               <input className="wa-input wa-mono" id="wa-provider-url" type="url" value={draft.baseURL}
                 disabled={busy === 'save'} placeholder="https://api.deepseek.com/v1" required
                 onChange={event => setDraft({ ...draft, baseURL: event.target.value })} />
+            </Field>
+            <Field label="接口格式" id="wa-provider-format"
+              help="Chat Completions 兼容面最广；Responses 是同一地址下的 /responses，部分中转只在它下面开放工具与联网调用。切换后建议先「测试连接」。">
+              <select className="wa-select" id="wa-provider-format" value={draft.apiFormat} disabled={busy === 'save'}
+                onChange={event => setDraft({ ...draft, apiFormat: event.target.value })}>
+                <option value="chat">Chat Completions（/chat/completions）</option>
+                <option value="responses">Responses（/responses）</option>
+              </select>
             </Field>
             <div className="wa-model-catalog-head">
               <div>
@@ -463,7 +473,7 @@ export function ProviderSettings({ connection, catalog }) {
         </div>
       </div>
       {loadError && <p className="wa-alert is-error" role="alert">{loadError}</p>}
-      {loading && !providers.length && <p className="wa-help" role="status">正在读取模型服务…</p>}
+      {loading && !providers.length && <LoadingBar label="正在读取模型服务…" rows={2} />}
       {!loading && !providers.length && !creating && (
         <p className="wa-help">还没有模型服务。添加一个服务并填入 API 密钥后，即可选择回复模型。</p>
       )}
@@ -477,7 +487,7 @@ export function ProviderSettings({ connection, catalog }) {
                   <span className="wa-service-dot" data-state={provider.credentialConfigured ? 'ok' : 'missing'} aria-hidden="true" />
                   <div className="wa-service-id">
                     <h3>{provider.name}</h3>
-                    <p className="wa-muted">{provider.id} · {provider.models.length} 个模型 · {provider.baseURL}</p>
+                    <p className="wa-muted">{provider.id} · {provider.models.length} 个模型 · {provider.baseURL} · {provider.apiFormat === 'responses' ? 'Responses' : 'Chat Completions'}</p>
                     <p className="wa-service-state" data-state={provider.credentialConfigured ? 'ok' : 'missing'}>
                       {provider.credentialConfigured ? 'API 密钥已配置' : 'API 密钥缺失'}
                     </p>

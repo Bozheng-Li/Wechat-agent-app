@@ -40,7 +40,9 @@ function snapshot() {
     momentsWriteReady: status.online && !!backend.session.value?.image_base_request,
     momentsAudienceReady: status.online && !!backend.session.value?.image_base_request,
     nativeStickersReady: status.online && !!(backend.session.value?.image_base_request ?? backend.session.value?.heartbeat_base_request),
-    ...diagnostics.lastError ? { error: '微信连接异常，请检查网络；持续离线时请重新扫码' } : {}
+    reloginRequired: diagnostics.reloginRequired === true,
+    ...diagnostics.reloginRequired === true ? { error: '微信登录已失效，请重新扫码登录' }
+      : diagnostics.lastError ? { error: '微信连接异常，请检查网络；持续离线时请重新扫码' } : {}
   };
 }
 function publishStatus() { send({ type: 'status', status: snapshot() }); }

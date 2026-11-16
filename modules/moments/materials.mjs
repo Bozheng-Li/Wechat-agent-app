@@ -111,7 +111,9 @@ export class MomentsMaterials extends MomentsMaterialStore {
       const text = await this.channel.runner.describeImage({ type: 'image', data: image.data, mediaType: image.mediaType, quality: 'original' }, abort,
         { question: '为朋友圈素材记录图片中实际可见的主体、色彩和构图。不要辨认人物身份、转录姓名电话或聊天文字，不猜测拍摄者、地点、关系或经历。只写简短描述，不写朋友圈文案。' });
       this.check(accountId, abort);
-      if (typeof text !== 'string' || !text.trim() || text.length > 2000 || !materialTextIsPublic(text)) throw new ChannelError('MOMENTS_MATERIAL_RESPONSE', '图片描述不可用，请手动补充；原图片保留');
+      if (typeof text !== 'string' || !text.trim() || text.length > 2000 ||
+        !materialTextIsPublic(text, this.peers(accountId).flatMap(peer => [peer.name, peer.peerId])))
+        throw new ChannelError('MOMENTS_MATERIAL_RESPONSE', '图片描述不可用，请手动补充；原图片保留');
       return this.put(accountId, { id, revision, fields: { ...item.fields, text } });
     }, 'describe');
   }

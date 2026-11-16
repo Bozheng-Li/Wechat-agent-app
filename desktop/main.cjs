@@ -38,17 +38,40 @@ async function runDesktop({ dataHome = process.env.WECHAT_APP_HOME, show = true 
     window.show(); window.focus();
   };
   app.on('second-instance', showWindow);
+  // Opening the data root can take a while on a large history, so the window is
+  // created first and renders this progress itself: the person sees the app at
+  // once and the stores open behind it instead of in front of a blank screen.
+  const STAGES = {
+    'data-root': ['正在读取数据目录设置…', 20],
+    application: ['正在打开数据目录…', 28],
+    lock: ['正在取得数据目录写入权…', 36],
+    open: ['正在加载会话与索引…', 48],
+    service: ['正在准备设置与界面…', 70],
+    activate: ['正在连接微信…', 84],
+  };
+  const versionLabel = '版本 ' + PACKAGE_VERSION;
+  let stage = { label: STAGES['data-root'][0], percent: STAGES['data-root'][1], version: versionLabel };
+  const postStage = () => { if (window && !window.isDestroyed()) window.webContents.send('wechat-app:boot', stage); };
+  const progress = key => {
+    const [label, percent] = STAGES[key] || [];
+    if (!label) return;
+    stage = { label, percent, version: versionLabel };
+    postStage();
+  };
   await app.whenReady();
   require('./network.cjs').installNetworkFetch();
-  const application = await createDesktopApplication({ dataHome: app.getPath('userData'), home: singletonHome, dshHome, encryption: {
-    isAvailable: () => safeStorage.isEncryptionAvailable(), encrypt: value => safeStorage.encryptString(value), decrypt: value => safeStorage.decryptString(value),
-  } });
   const page = pathToFileURL(path.join(__dirname, '../ui/index.html')).href;
   const active = new Map();
+  let application, readyResolve, readyReject;
+  const appReady = new Promise((resolve, reject) => { readyResolve = resolve; readyReject = reject; });
+  // Nobody awaits this promise when startup fails before the first RPC.
+  appReady.catch(() => {});
   window = new BrowserWindow({ width: 1360, height: 920, minWidth: 720, minHeight: 560, show: false,
     title: '微信 Agent', icon: path.join(__dirname, 'icon.ico'), backgroundColor: '#f5f6f5', autoHideMenuBar: true,
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false,
       spellcheck: false, backgroundThrottling: false, offscreen: !show } });
+  // A reload or a slow frame must not lose the stage the backend is already in.
+  window.webContents.on('did-finish-load', postStage);
   const owner = event => {
     if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== page)
       throw new Error('只有本应用窗口可以管理微信助手');
@@ -59,14 +82,20 @@ async function runDesktop({ dataHome = process.env.WECHAT_APP_HOME, show = true 
         typeof request.endpoint !== 'string' || request.endpoint.length > 100 || active.has(request.id)) throw new Error('无效请求');
     if (quitting) throw new Error('应用正在退出');
     const controller = new AbortController(); active.set(request.id, controller);
-    try { return await application.call(request.endpoint, request.payload, controller.signal); }
-    finally { active.delete(request.id); }
+    try {
+      // Requests arriving during startup wait for the data layer instead of failing.
+      const service = application ?? await appReady;
+      return await service.call(request.endpoint, request.payload, controller.signal);
+    } finally { active.delete(request.id); }
   });
   ipcMain.on('wechat-app:cancel', (event, id) => { try { owner(event); active.get(id)?.abort(); } catch {} });
   ipcMain.handle('wechat-app:external', async (event, address) => {
     owner(event);
+    // Validate the shape before parsing: a non-string used to surface an internal
+    // "Invalid URL" TypeError instead of the user-facing message.
+    if (typeof address !== 'string' || !address || address.length > 8192) throw new Error('网页链接无效');
     const url = new URL(address);
-    if (typeof address !== 'string' || address.length > 8192 || !['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('网页链接无效');
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('网页链接无效');
     await shell.openExternal(url.href);
   });
   // The renderer only ever receives a path the person picked in their own dialog.
@@ -130,7 +159,10 @@ async function runDesktop({ dataHome = process.env.WECHAT_APP_HOME, show = true 
   window.on('close', event => { if (!quitting) { event.preventDefault(); window.hide(); } });
   const stop = () => stopping ??= (async () => {
     quitting = true; for (const controller of active.values()) controller.abort();
-    await application.close(); tray?.destroy();
+    // Startup may still be running: wait for it so the stores close in order.
+    await appReady.catch(() => {});
+    await application?.close();
+    tray?.destroy();
     ipcMain.removeHandler('wechat-app:rpc'); ipcMain.removeHandler('wechat-app:external');
     ipcMain.removeHandler('wechat-app:pick-directory'); ipcMain.removeHandler('wechat-app:open-path');
     ipcMain.removeHandler('wechat-app:update-check'); ipcMain.removeHandler('wechat-app:update-download');
@@ -143,12 +175,42 @@ async function runDesktop({ dataHome = process.env.WECHAT_APP_HOME, show = true 
     if (quitting) return;
     event.preventDefault(); void stop().finally(() => app.quit());
   });
-  await window.loadURL(page);
+  progress('data-root');
+  try {
+    await window.loadURL(page);
+  } catch (error) { throw error; }
   if (showRequested) showWindow();
+  // Everything below runs behind the visible window; the panel waits for `ready`.
+  const startedAt = Date.now();
+  try {
+    application = await createDesktopApplication({ dataHome: app.getPath('userData'), home: singletonHome, dshHome, progress, encryption: {
+      isAvailable: () => safeStorage.isEncryptionAvailable(), encrypt: value => safeStorage.encryptString(value), decrypt: value => safeStorage.decryptString(value),
+    } });
+  } catch (error) {
+    // Release anything that queued behind startup before the app goes away.
+    readyReject(error);
+    throw error;
+  }
+  readyResolve(application);
+  if (!window.isDestroyed()) {
+    window.webContents.send('wechat-app:ready', { version: versionLabel, elapsedMs: Date.now() - startedAt });
+    if (showRequested) window.focus();
+  }
   return { window, application, stop, updater, dataHome: app.getPath('userData') };
 }
 
 module.exports = { runDesktop };
-if (require.main === module) runDesktop().catch(error => {
+
+// Electron loads the package `main` itself: in a packaged build `require.main` is
+// not this module, and under `electron .` it is Electron's own module, so the plain
+// `require.main === module` check never fired and the window never opened.
+const isEntry = () => {
+  if (require.main === module) return true;
+  if (!process.versions.electron) return false;
+  if (!process.defaultApp) return true;
+  const target = process.argv[1];
+  return typeof target === 'string' && (target === '.' || path.resolve(target) === __filename);
+};
+if (isEntry()) runDesktop().catch(error => {
   dialog.showErrorBox('微信 Agent 启动失败', error.message || '请检查应用安装与数据目录'); app.exit(1);
 });

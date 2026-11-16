@@ -150,7 +150,11 @@ export async function settingsMutation(
           selectors
         );
       }
-      await channel.authorization?.whenIdle();
+      // The settings are already saved above; a revocation cleanup that keeps
+      // failing must not make the save look failed - it retries on its own.
+      try {
+        await channel.authorization?.whenIdle();
+      } catch {}
       break;
     }
   }

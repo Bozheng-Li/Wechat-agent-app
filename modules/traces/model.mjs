@@ -36,7 +36,9 @@ export function observeExecutionSession(ctx, { sessionId, agent, selection, mode
         }
       } catch (error) { failure = error; throw error; }
       finally {
-        const cancelled = request.signal?.aborted || finish?.kind === 'aborted' || !finished && !failure;
+        // Some adapters end the stream after the last block without emitting a
+        // finish chunk; that is a completed call, not a cancelled one.
+        const cancelled = request.signal?.aborted || finish?.kind === 'aborted' || (!finished && !failure && !blocks.size);
         step.end({ state: cancelled ? 'cancelled' : failure || finish?.kind === 'error' ? 'failed' : 'completed', error: failure,
           output: { content: [...blocks.values()], finishReason: finish, usage }, metadata: { usage, finishReason: finish?.kind } });
       }

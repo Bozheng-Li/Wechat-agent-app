@@ -34,15 +34,22 @@ function rootWithData(storeId, files = {}, accounts = []) {
   return directory;
 }
 
-test('数据目录指针缺失或损坏时继续使用应用自己的目录', () => {
+test('数据目录指针缺失时用应用自己的目录，损坏时明确标记而不是静默回落', () => {
   const home = temporary('wa-home-');
   assert.equal(readLocation(home), undefined);
   assert.deepEqual(resolveDataRoot(home), { root: path.resolve(home), source: 'default' });
   fs.writeFileSync(path.join(home, 'location.json'), '{ broken');
-  assert.equal(readLocation(home), undefined);
+  // 损坏的指针仍然不能阻止启动，但必须如实报告：静默回落后用户再也找不到真实目录。
+  assert.deepEqual(readLocation(home), { corrupt: true });
+  assert.deepEqual(resolveDataRoot(home), { root: path.resolve(home), source: 'default', corrupted: true });
   fs.writeFileSync(path.join(home, 'location.json'), JSON.stringify({ version: 1, root: 'relative/path' }));
-  assert.equal(readLocation(home), undefined);
+  assert.equal(readLocation(home).corrupt, true);
   assert.equal(resolveDataRoot(home).source, 'default');
+  // 下一次切换前把损坏的指针留档，避免覆盖唯一的线索。
+  const target = path.join(home, 'moved');
+  fs.mkdirSync(target, { recursive: true });
+  applySwitch(home, planSwitch(home, { target, mode: 'use' }));
+  assert.equal(fs.existsSync(path.join(home, 'location.json.corrupt')), true);
 });
 
 test('切换数据目录前校验路径、占用与已有数据', () => {
@@ -128,6 +135,29 @@ test('目标目录被占用或复制失败时继续使用原目录并记录原�
   assert.equal(result.root, path.resolve(current));
   assert.match(readLocation(home).lastSwitchError, /原来的数据目录/);
   assert.equal(readLocation(home).pending, undefined);
+});
+
+test('复制到当前目录内部或外部父目录时直接拒绝，不会递归复制自身', () => {
+  const home = temporary('wa-home-');
+  const current = rootWithData('store-a');
+  writeLocation(home, { root: current, storeId: 'store-a' });
+  const nested = path.join(current, 'backup');
+  assert.throws(() => planSwitch(home, { target: nested, mode: 'copy' }), { code: 'DATA_ROOT_OVERLAP' });
+  const parent = path.dirname(path.resolve(current));
+  assert.throws(() => planSwitch(home, { target: parent, mode: 'copy' }), { code: 'DATA_ROOT_OVERLAP' });
+  // "use" may point inside the current directory: nothing is copied.
+  assert.equal(planSwitch(home, { target: nested, mode: 'use' }).mode, 'use');
+  // A pending copy recorded by an older version is rechecked on startup and the
+  // directory it created is removed again instead of being published.
+  fs.writeFileSync(path.join(home, 'location.json'), JSON.stringify({
+    version: 1, root: path.resolve(current), storeId: 'store-a',
+    pending: { mode: 'copy', target: nested, source: path.resolve(current), at: new Date().toISOString() },
+  }));
+  const result = resolveDataRoot(home);
+  assert.equal(result.source, 'failed');
+  assert.match(readLocation(home).lastSwitchError, /互相包含/);
+  assert.equal(fs.existsSync(nested), false, '失败后不留下半成品目录');
+  assert.equal(fs.readFileSync(path.join(current, 'config.yaml'), 'utf8').includes('store-a'), true);
 });
 
 test('识别 DSH 插件记录的数据目录，供两端共用', () => {

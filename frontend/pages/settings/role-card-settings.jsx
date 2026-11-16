@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '../../components/button.jsx';
 import { Field, FormActions } from '../../components/form-ui.jsx';
+import { LoadingBar } from '../../components/loading.jsx';
 import { roleCardSettings } from '../../../shared/role-card-settings.mjs';
 
 const draftOf = settings => ({ enabled: settings.enabled, trigger: settings.trigger, messageThreshold: String(settings.messageThreshold) });
@@ -44,7 +45,7 @@ export function RoleCardSettings({ rpc, blocked, onSaved, children }) {
     <h2>自动整理 · 全局设置</h2>
     <p className="wa-help">每个人单独累计，私聊、群聊与已读取的朋友圈原文合并计数。整理间隔与超时统一在“设置 → 时间设置”中修改。</p>
     {error && <p className="wa-alert is-error" role="alert">{error} <Button quiet disabled={busy} onClick={() => load(lifetime.current.signal)}>重新载入总设置</Button></p>}
-    {!draft ? <p className="wa-help">正在读取总设置…</p> : <>
+    {!draft ? <LoadingBar label="正在读取角色卡总设置…" rows={2} /> : <>
       <label className="wa-row">
         <input type="checkbox" role="switch" aria-label="自动整理角色卡" checked={draft.enabled} disabled={busy || blocked}
           onChange={event => change('enabled', event.target.checked)} />

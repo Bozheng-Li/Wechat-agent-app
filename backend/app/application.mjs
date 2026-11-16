@@ -9,7 +9,11 @@ import { readWorkspaceLocation, describeWorkspace, migrateWorkspaceRoot } from "
 import { rpcHandler } from "../rpc/handler.mjs";
 import { createPluginService } from "./service.mjs";
 
-export async function startApplication(ctx) {
+// A macrotask hop: lets Electron paint the startup progress before a slow
+// synchronous store open takes over the main process.
+const breathe = () => new Promise(resolve => setImmediate(resolve));
+
+export async function startApplication(ctx, { progress, lazy = false } = {}) {
   const bootstrap = path.resolve(ctx.dataHome);
   let resolvedRoot = bootstrap;
   const resources = resourcePath();
@@ -105,32 +109,71 @@ export async function startApplication(ctx) {
     // root-bound services agree on the committed destination.
     await current.activate();
   };
-  try {
-    lock = acquireLock(bootstrap);
-    resolvedRoot = readWorkspaceLocation(bootstrap);
-    current = await open(resolvedRoot);
-    await current.activate();
-  } catch (error) {
-    startupError = publicError(error, '微信助手启动失败，请检查安装包或重新启动应用');
+  // Desktop startup is lazy: the window opens as soon as the data directory is
+  // claimed, and requests wait here for the stores and the WeChat runtime instead of
+  // holding the whole UI back. Tests keep the eager path.
+  const initialize = async () => {
     try {
-      await current?.close();
-    } finally {
-      lock?.release();
-      lock = undefined;
+      progress?.('lock');
+      // The window is already on screen and painting this stage; yielding between
+      // stages keeps the main process answering Windows instead of "未响应".
+      await breathe();
+      lock = acquireLock(bootstrap);
+      resolvedRoot = readWorkspaceLocation(bootstrap);
+      progress?.('open');
+      await breathe();
+      current = await open(resolvedRoot);
+    } catch (error) {
+      startupError = publicError(error, '微信助手启动失败，请检查安装包或重新启动应用');
+      try {
+        await current?.close();
+      } finally {
+        lock?.release();
+        lock = undefined;
+      }
     }
-  }
-  service = createPluginService({
-    ctx,
-    root: current?.root || resolvedRoot,
-    ...current,
-    relocateWorkspace,
-    startupError,
-    isDisposed: () => disposed,
-    lifetime: lifetime.signal,
-  });
-  const dispatch = rpcHandler(service, () => disposed);
-  return {
-    call: (endpoint, payload = {}, signal = new AbortController().signal) => dispatch(endpoint, payload, signal, { principal: { kind: 'owner' } }),
-    close, service,
+    progress?.('service');
+    await breathe();
+    service = createPluginService({
+      ctx,
+      root: current?.root || resolvedRoot,
+      ...current,
+      relocateWorkspace,
+      startupError,
+      isDisposed: () => disposed,
+      lifetime: lifetime.signal,
+    });
+    const dispatch = rpcHandler(service, () => disposed);
+    if (startupError || !current) return dispatch;
+    // Connecting to WeChat takes the longest and settings do not need it, so a lazy
+    // start returns the dispatcher first and only eager callers wait for activation.
+    progress?.('activate');
+    const activation = (async () => {
+      try {
+        await current.activate();
+      } catch (error) {
+        if (lazy) { service.setStartupError?.(error); return; }
+        startupError = publicError(error, '微信助手启动失败，请检查安装包或重新启动应用');
+        try {
+          await current?.close();
+        } finally {
+          lock?.release();
+          lock = undefined;
+        }
+      }
+    })();
+    if (!lazy) await activation;
+    else void activation;
+    return dispatch;
   };
+  const started = initialize();
+  const handle = {
+    call: async (endpoint, payload = {}, signal = new AbortController().signal) =>
+      (await started)(endpoint, payload, signal, { principal: { kind: 'owner' } }),
+    close: async () => { await started.catch(() => {}); await close(); },
+    get service() { return service; },
+  };
+  if (lazy) return handle;
+  await started;
+  return handle;
 }

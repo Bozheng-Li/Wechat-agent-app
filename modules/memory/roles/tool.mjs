@@ -85,7 +85,8 @@ export function personRoleCardTool(channel, scope, assertAllowed = () => {}, opt
       }
       if (args.query?.trim()) {
         const selected = Object.entries(view.card).filter(([field, value]) => value &&
-          (['label', 'addressAs'].includes(field) || args.query.includes(ROLE_CARD_LABELS[field]) ||
+          // The query is usually a fragment ("饮食") of the label ("饮食偏好").
+          (['label', 'addressAs'].includes(field) || ROLE_CARD_LABELS[field]?.includes(args.query) ||
             relevantMemoryReference(value, args.query, { maxChars: 1600 }).matchedTerms.length));
         // A small complete card is more useful than falsely claiming no match.
         if (selected.some(([field]) => !['label', 'addressAs'].includes(field))) {

@@ -189,10 +189,17 @@ export class MomentsAutomation {
         const current = this.data.posts[key(accountId, post.id)];
         if (current?.deleted) continue;
         if (current?.readFailure?.retryAt > this.now()) { deferred++; continue; }
-        const comments = []; let cursor;
+        const comments = []; let cursor; const cursors = new Set();
         try {
-          do { check(); const result = await this.read(accountId, { action: 'comments', postId: post.id, limit: 50, ...(cursor ? { cursor } : {}) }, signal);
-            comments.push(...result.items); cursor = result.nextCursor; check(); } while (cursor);
+          // Bounded paging: a transport that keeps handing back the same cursor used
+          // to spin here until the run timeout, and the friend-reply pass never ran.
+          for (let page = 0; page < 20; page++) {
+            check();
+            const result = await this.read(accountId, { action: 'comments', postId: post.id, limit: 50, ...(cursor ? { cursor } : {}) }, signal);
+            comments.push(...result.items); cursor = result.nextCursor; check();
+            if (!cursor || cursors.has(cursor)) break;
+            cursors.add(cursor);
+          }
         } catch (error) {
           check();
           if (!this.recordReadFailure(accountId, post.id, error)) throw error;

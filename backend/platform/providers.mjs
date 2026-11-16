@@ -11,7 +11,7 @@ export function modelBaseURL(value) {
   if (typeof value !== 'string' || value.length > 2048 || url.username || url.password || url.search || url.hash ||
       !(url.protocol === 'https:' || url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)))
     fail('模型服务需要 HTTPS；本机模型可使用 localhost 的 HTTP 地址');
-  return url.href.replace(/\/+$/, '').replace(/\/chat\/completions$/, '');
+  return url.href.replace(/\/+$/, '').replace(/\/(?:chat\/completions|responses|completions)$/, '');
 }
 export const providerCredential = provider => 'MODEL_' + createHash('sha256').update(provider.id + '\n' + provider.baseURL).digest('hex');
 export function validateProvider(input) {
@@ -28,7 +28,10 @@ export function validateProvider(input) {
     return { id: model.id, name: String(model.name || model.id).slice(0, 200), vision: model.vision === true, reasoningEfforts: [...new Set(efforts)] };
   });
   return { id: input.id, name: input.name.trim(), baseURL: modelBaseURL(input.baseURL), models,
-    stream: input.stream !== false, requiresKey: input.requiresKey !== false };
+    stream: input.stream !== false, requiresKey: input.requiresKey !== false,
+    // Chat Completions stays the default: it is what most relays expose. Responses is
+    // the same provider spoken at /responses, where many relays do offer tool calls.
+    apiFormat: input.apiFormat === 'responses' ? 'responses' : 'chat' };
 }
 
 export class ModelProviders {
@@ -63,7 +66,11 @@ export class ModelProviders {
   save(input, apiKey) {
     const operation = this.queue.then(async () => {
       const provider = validateProvider(input);
+      const previous = this.providers.find(value => value.id === provider.id);
       if (apiKey !== undefined && apiKey !== '') await this.credentials.set(providerCredential(provider), apiKey);
+      // The credential key embeds the base URL: after an address change the old
+      // secret would stay behind as a decryptable orphan nobody ever deletes.
+      if (previous && previous.baseURL !== provider.baseURL) await this.credentials.delete(providerCredential(previous));
       const providers = [...this.providers]; const index = providers.findIndex(value => value.id === provider.id);
       if (index < 0) providers.push(provider); else providers[index] = provider;
       this.write(providers);

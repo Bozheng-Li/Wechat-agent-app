@@ -82,6 +82,7 @@ export function MediaLibraryPage({ rpc, status, onNavigate }) {
     mounted = useRef(true),
     previewCache = useRef(new Map()),
     previewSignatures = useRef(new Map()),
+    previewFailures = useRef(new Map()),
     currentAccount = useRef(accountId);
   busyRef.current = busy;
   currentAccount.current = accountId;
@@ -111,6 +112,7 @@ export function MediaLibraryPage({ rpc, status, onNavigate }) {
     setThumbnails({});
     previewCache.current.clear();
     previewSignatures.current.clear();
+    previewFailures.current.clear();
     setOffset(0);
     setPackId('');
     setSource('');
@@ -160,7 +162,14 @@ export function MediaLibraryPage({ rpc, status, onNavigate }) {
                 setThumbnails((value) => ({ ...value, [asset.id]: url }));
               }
             } catch {
-              if (!controller.signal.aborted) previewSignatures.current.set(asset.id, (asset.contentSha256 || asset.id) + ':' + asset.bytes);
+              if (!controller.signal.aborted) {
+                // A single transient failure used to be remembered as "already
+                // tried", which left the tile permanently blank until a reload.
+                const attempts = (previewFailures.current.get(asset.id) || 0) + 1;
+                previewFailures.current.set(asset.id, attempts);
+                if (attempts >= 3)
+                  previewSignatures.current.set(asset.id, (asset.contentSha256 || asset.id) + ':' + asset.bytes);
+              }
             }
           })
         );

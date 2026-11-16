@@ -235,6 +235,14 @@ function createUpdater({
       fs.rmSync(path.join(updates, entry.fileName), { force: true });
       fs.rmSync(path.join(updates, entry.fileName + '.blockmap'), { force: true });
     }
+    // A crash mid-download leaves "<setup>.exe.part" behind; without a sweep every
+    // abandoned version keeps hundreds of megabytes for ever.
+    try {
+      for (const name of fs.readdirSync(updates)) {
+        if (!name.endsWith('.part') || kept.has(name.slice(0, -'.part'.length))) continue;
+        fs.rmSync(path.join(updates, name), { force: true });
+      }
+    } catch {}
     try {
       fs.writeFileSync(path.join(updates, CACHE_FILE), JSON.stringify({ entries }, null, 2), 'utf8');
     } catch {}
@@ -493,6 +501,9 @@ function createUpdater({
     if (downloading) throw new UpdateError('UPDATE_BUSY', '更新包正在下载');
     if (!latest || latest.status !== 'available') await check();
     if (!latest || latest.status !== 'available') throw new UpdateError('UPDATE_NOT_AVAILABLE', '当前已是最新版本');
+    // Without a checksum the download cannot be verified, and the banner below still
+    // promises "已通过 SHA-512 校验": refuse instead of installing unverified bytes.
+    if (!latest.sha512) throw new UpdateError('UPDATE_UNVERIFIED', '更新信息缺少校验值，未下载；请通过官方渠道重新检查更新');
     fs.mkdirSync(updates, { recursive: true });
     const target = path.join(updates, latest.fileName), partial = target + '.part';
     controller = new AbortController();

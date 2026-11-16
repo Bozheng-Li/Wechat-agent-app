@@ -47,6 +47,9 @@ export function validateCredential(raw: unknown): Credential {
   const body_key = c.body_key === undefined ? undefined : hex(c.body_key, 'body_key', 32);
   if (body_key && body_key.length !== 32) throw new BridgeError('ERR_CREDENTIAL', 'body_key must be 16 bytes');
   const s08 = c.s08 === undefined ? undefined : hex(c.s08, 's08', 512);
+  // Every frame checksum is derived from this 16-byte seed: a wrong length made
+  // every send fail with ERR_ACK_TIMEOUT and reconnects, with no hint why.
+  if (s08 && s08.length !== 32) throw new BridgeError('ERR_CREDENTIAL', 's08 must be 16 bytes');
   if (!!body_key !== !!s08) throw new BridgeError('ERR_CREDENTIAL', 'QR session requires both body_key and s08');
   const image = c.image_base_request === undefined ? undefined : hex(c.image_base_request, 'image_base_request', 8192);
   if (image) validateImageBaseRequest(Buffer.from(image, 'hex'), { uin: Number(c.uin), body_key });

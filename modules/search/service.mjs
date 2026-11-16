@@ -1,4 +1,5 @@
 import { ChannelError, DEFAULT_TAVILY_URL, DEFAULT_DEEPSEEK_URL, DEFAULT_DEEPSEEK_MODEL, searchBaseURL } from "../../shared/contracts.mjs";
+import { searchWithFallback } from './fallback.mjs';
 
 import { TIME_DEFAULTS } from '../../shared/time-settings.mjs';
 
@@ -132,12 +133,14 @@ export class SearchService {
       const selected = settings.searchProvider === 'dsh' ? 'deepseek' : settings.searchProvider ?? 'tavily';
       if (!['deepseek', 'tavily'].includes(selected))
         throw new ChannelError('INVALID_SEARCH_CONFIG', '请选择 DeepSeek 搜索或 Tavily。');
-      const value = selected === 'deepseek'
-        ? await this.searchDeepSeek(settings, request, signal)
-        : await this.search(selected, settings.tavilyBaseURL ?? DEFAULT_TAVILY_URL, request, signal);
-      assertAllowed(); signal?.throwIfAborted();
-      return { ...value, provider: selected, primaryProvider: selected, fallbackUsed: false, fallbackAttempted: false,
-        attempts: [{ provider: selected, state: value.sources.length ? 'succeeded' : 'empty', sourceCount: value.sources.length }] };
+      const baseURL = settings.tavilyBaseURL ?? DEFAULT_TAVILY_URL;
+      return searchWithFallback({ primary: selected, request, signal, assertAllowed,
+        timeoutMs: this.getAttemptTimeoutMs(),
+        // The alternate attempt must prove its own credential instead of reusing
+        // whatever route happened to answer first.
+        search: (provider, query, attemptSignal, { requireCredential = false } = {}) => provider === 'tavily'
+          ? this.search('tavily', baseURL, query, attemptSignal, { requireCredential })
+          : this.searchDeepSeek(settings, query, attemptSignal) });
     } };
   }
   // DeepSeek search runs on the Anthropic-compatible Messages endpoint with the
@@ -169,68 +172,78 @@ export class SearchService {
     );
     let response;
     try {
-      response = await this.fetchImpl(baseURL + '/messages', {
-        method: 'POST',
-        redirect: 'error',
-        signal: combined,
-        headers: {
-          'content-type': 'application/json',
-          accept: 'application/json',
-          'anthropic-version': '2023-06-01',
-          'x-api-key': apiKey,
-          authorization: 'Bearer ' + apiKey,
-        },
-        body: JSON.stringify({
-          model,
-          max_tokens: 1024,
-          stream: false,
-          system: 'Search the public web for the topic and answer with a short factual summary.',
-          messages: [{ role: 'user', content: request.query }],
-          tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: limit }],
-        }),
-      });
-    } catch (error) {
-      combined.throwIfAborted();
-      if (signal?.aborted) throw signal.reason ?? error;
-      throw new ChannelError('WEB_SEARCH_SERVICE_FAILED', 'DeepSeek 搜索暂时无法连接，请稍后重试。');
+      try {
+        response = await this.fetchImpl(baseURL + '/messages', {
+          method: 'POST',
+          redirect: 'error',
+          signal: combined,
+          headers: {
+            'content-type': 'application/json',
+            accept: 'application/json',
+            'anthropic-version': '2023-06-01',
+            'x-api-key': apiKey,
+            authorization: 'Bearer ' + apiKey,
+          },
+          body: JSON.stringify({
+            model,
+            max_tokens: 1024,
+            stream: false,
+            system: 'Search the public web for the topic and answer with a short factual summary.',
+            messages: [{ role: 'user', content: request.query }],
+            tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: limit }],
+          }),
+        });
+      } catch (error) {
+        combined.throwIfAborted();
+        if (signal?.aborted) throw signal.reason ?? error;
+        throw new ChannelError('WEB_SEARCH_SERVICE_FAILED', 'DeepSeek 搜索暂时无法连接，请稍后重试。');
+      }
+      if (!response.ok) {
+        const status = response.status;
+        if (status === 401 || status === 403)
+          throw new ChannelError('WEB_SEARCH_AUTH_FAILED', `DeepSeek 搜索接口返回 HTTP ${status}，请核对 DeepSeek API Key 与访问权限。`);
+        if (status === 402)
+          throw new ChannelError('WEB_SEARCH_QUOTA', 'DeepSeek 搜索接口返回 HTTP 402，请检查账户余额或额度。');
+        if (status === 429)
+          throw new ChannelError('WEB_SEARCH_RATE_LIMITED', 'DeepSeek 搜索接口返回 HTTP 429，本次查询受到限流，请稍后重试。');
+        throw new ChannelError('WEB_SEARCH_SERVICE_FAILED', `DeepSeek 搜索接口返回 HTTP ${status}，本次未取得搜索结果。`);
+      }
+      const result = await responseJSON(response, combined);
+      const blocks = Array.isArray(result.content) ? result.content : [];
+      const failures = blocks.flatMap((block) =>
+        block?.type === 'web_search_tool_result' && block.content?.type === 'web_search_tool_result_error' ? [block.content] : []
+      );
+      const found = blocks
+        .flatMap((block) => (block?.type === 'web_search_tool_result' && Array.isArray(block.content) ? block.content : []))
+        .filter((item) => item?.type === 'web_search_result');
+      if (!found.length) {
+        if (failures.length)
+          throw new ChannelError(
+            'WEB_SEARCH_SERVICE_FAILED',
+            `DeepSeek 搜索返回错误：${failures[0].error_code || '未知原因'}，本次未取得结果。`
+          );
+        throw new ChannelError(
+          'WEB_SEARCH_UNSUPPORTED',
+          'DeepSeek 搜索没有返回可引用的联网结果；请核对该服务地址是否支持 web_search 工具。'
+        );
+      }
+      // The result items only carry title/url; the readable evidence is the
+      // model's own summary, which the answer needs in order to cite anything.
+      const summary = blocks
+        .filter((block) => block?.type === 'text' && typeof block.text === 'string')
+        .map((block) => block.text).join('\n').trim();
+      const sources = boundedSources(found.map((item) => ({ title: item.title, url: item.url, snippet: '' })), limit);
+      return {
+        ...(summary ? { content: summary.slice(0, 10000) } : {}),
+        sources,
+        ...(request.includeImages ? { images: [] } : {}),
+        truncated: found.length > limit,
+      };
     } finally {
+      // Keep the deadline alive while the body is being read: a server that
+      // sends headers and then stalls must not hang the reply turn forever.
       clearTimeout(timer);
     }
-    if (!response.ok) {
-      const status = response.status;
-      if (status === 401 || status === 403)
-        throw new ChannelError('WEB_SEARCH_AUTH_FAILED', `DeepSeek 搜索接口返回 HTTP ${status}，请核对 DeepSeek API Key 与访问权限。`);
-      if (status === 402)
-        throw new ChannelError('WEB_SEARCH_QUOTA', 'DeepSeek 搜索接口返回 HTTP 402，请检查账户余额或额度。');
-      if (status === 429)
-        throw new ChannelError('WEB_SEARCH_RATE_LIMITED', 'DeepSeek 搜索接口返回 HTTP 429，本次查询受到限流，请稍后重试。');
-      throw new ChannelError('WEB_SEARCH_SERVICE_FAILED', `DeepSeek 搜索接口返回 HTTP ${status}，本次未取得搜索结果。`);
-    }
-    const result = await responseJSON(response, combined);
-    const blocks = Array.isArray(result.content) ? result.content : [];
-    const failures = blocks.flatMap((block) =>
-      block?.type === 'web_search_tool_result' && block.content?.type === 'web_search_tool_result_error' ? [block.content] : []
-    );
-    const found = blocks
-      .flatMap((block) => (block?.type === 'web_search_tool_result' && Array.isArray(block.content) ? block.content : []))
-      .filter((item) => item?.type === 'web_search_result');
-    if (!found.length) {
-      if (failures.length)
-        throw new ChannelError(
-          'WEB_SEARCH_SERVICE_FAILED',
-          `DeepSeek 搜索返回错误：${failures[0].error_code || '未知原因'}，本次未取得结果。`
-        );
-      throw new ChannelError(
-        'WEB_SEARCH_UNSUPPORTED',
-        'DeepSeek 搜索没有返回可引用的联网结果；请核对该服务地址是否支持 web_search 工具。'
-      );
-    }
-    const sources = boundedSources(found.map((item) => ({ title: item.title, url: item.url, snippet: '' })), limit);
-    return {
-      sources,
-      ...(request.includeImages ? { images: [] } : {}),
-      truncated: found.length > limit,
-    };
   }
   async search(provider, baseURL, request, signal, { requireCredential = false } = {}) {
     signal?.throwIfAborted();

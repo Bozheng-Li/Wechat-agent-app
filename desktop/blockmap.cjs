@@ -51,7 +51,9 @@ function parseBlockmap(buffer) {
     throw invalid('blockmap 不是有效的 JSON');
   }
   if (!data || typeof data !== 'object' || Array.isArray(data)) throw invalid('blockmap 结构无效');
-  if (data.version !== 2) throw invalid('blockmap 版本不受支持');
+  // electron-builder writes version as the string "2"; accepting only the number
+  // rejected every real blockmap and disabled delta updates without a word.
+  if (String(data.version) !== '2') throw invalid('blockmap 版本不受支持');
   if (!Array.isArray(data.files) || data.files.length !== 1) throw invalid('blockmap 必须只描述一个文件');
   const file = data.files[0];
   if (!file || typeof file !== 'object') throw invalid('blockmap 文件描述无效');

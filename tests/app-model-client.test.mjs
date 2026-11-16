@@ -5,7 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { CredentialStore } from '../backend/platform/credentials.mjs';
 import { ModelProviders } from '../backend/platform/providers.mjs';
-import { ModelClient, readModelResponse } from '../modules/agent/model-client.mjs';
+import { ModelClient, readModelResponse, readResponsesResponse } from '../modules/agent/model-client.mjs';
 import { AppAgentRunner } from '../lib/testing.js';
 import { stickerPng } from './fixtures/stickers.mjs';
 
@@ -13,12 +13,13 @@ function fixture(t, responses, models = [{ id: 'test-model' }]) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wechat-app-model-'));
   t.after(() => { assert.equal(path.dirname(fs.realpathSync(root)), fs.realpathSync(os.tmpdir())); assert(path.basename(root).startsWith('wechat-app-model-')); fs.rmSync(root, { recursive: true, force: true }); });
   const encryption = { isAvailable: () => true, encrypt: value => Buffer.from(value.split('').reverse().join('')), decrypt: value => value.toString().split('').reverse().join('') };
-  const credentials = new CredentialStore(root, encryption), providers = new ModelProviders(root, credentials), requests = [];
-  const fetchImpl = async (_url, request) => { requests.push(JSON.parse(request.body)); const value = responses.shift(); if (value instanceof Error) throw value; return Response.json(value); };
+  const credentials = new CredentialStore(root, encryption), providers = new ModelProviders(root, credentials), requests = [], urls = [];
+  const fetchImpl = async (url, request) => { urls.push(url); requests.push(JSON.parse(request.body)); const value = responses.shift(); if (value instanceof Error) throw value; return Response.json(value); };
   const ctx = { llm: providers, credentials, agentDefaultModel: { currentSelection: () => providers.defaultSelection() } };
   const runner = new AppAgentRunner(ctx, () => null, () => ({ modelConfig: { promptStrategy: 'progressive-v1' } }));
   runner.client = new ModelClient(providers, { fetchImpl });
-  return { root, credentials, providers, runner, requests, prepare: () => providers.save({ id: 'test', name: '测试', baseURL: 'http://127.0.0.1:12345/v1', models, stream: false }, 'test-private-key') };
+  return { root, credentials, providers, runner, requests, urls,
+    prepare: (extra = {}) => providers.save({ id: 'test', name: '测试', baseURL: 'http://127.0.0.1:12345/v1', models, stream: false, ...extra }, 'test-private-key') };
 }
 const reply = (content = '你好', calls, finish = calls ? 'tool_calls' : 'stop') => ({ choices: [{ finish_reason: finish, message: { role: 'assistant', content, ...(calls ? { tool_calls: calls } : {}) } }], usage: { prompt_tokens: 10, completion_tokens: 5 } });
 const toolCall = (name, args = {}, id = 'call-1') => ({ id, type: 'function', function: { name, arguments: JSON.stringify(args) } });
@@ -107,4 +108,49 @@ test('editing an endpoint during a tool loop affects only the next run', async t
   assert.deepEqual(destinations, ['http://127.0.0.1:12345/v1/chat/completions', 'http://127.0.0.1:12345/v1/chat/completions']);
   await assert.rejects(f.runner.run(request()), error => error.code === 'MODEL_KEY_MISSING');
   assert.equal(destinations.length, 2);
+});
+
+const responsesReply = (text, calls, status = 'completed') => ({ status, output: [
+  ...(text ? [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text }] }] : []),
+  ...(calls ?? []).map(call => ({ type: 'function_call', call_id: call.id, name: call.function.name, arguments: call.function.arguments })),
+], usage: { input_tokens: 10, output_tokens: 5 } });
+
+test('responses format speaks /responses, keeps the same tool loop and posts translated input items', async t => {
+  const f = fixture(t, [responsesReply(null, [toolCall('lookup', { q: '约定' })]), responsesReply('约定是明天见。')]);
+  await f.prepare({ apiFormat: 'responses' });
+  let called = 0;
+  const result = await f.runner.run(request({ tools: [{ name: 'lookup', description: '查约定', parameters: { type: 'object' },
+    execute(args) { called++; assert.equal(args.q, '约定'); return '{"time":"明天"}'; } }] }));
+  assert.equal(called, 1); assert.equal(result.text, '约定是明天见。');
+  assert.deepEqual(f.urls, ['http://127.0.0.1:12345/v1/responses', 'http://127.0.0.1:12345/v1/responses']);
+  assert.deepEqual(f.requests[0].tools, [{ type: 'function', name: 'lookup', description: '查约定', parameters: { type: 'object' } }]);
+  assert.equal(f.requests[0].tool_choice, 'auto'); assert.equal(f.requests[0].messages, undefined);
+  assert.equal(f.requests[0].input[0].role, 'system');
+  assert.deepEqual(f.requests[1].input.slice(-2), [
+    { type: 'function_call', call_id: 'call-1', name: 'lookup', arguments: '{"q":"约定"}' },
+    { type: 'function_call_output', call_id: 'call-1', output: '{"time":"明天"}' },
+  ]);
+});
+
+test('responses SSE reassembles deltas and keeps the completed tool call', async () => {
+  const frames = [
+    { type: 'response.output_text.delta', delta: '你好' },
+    { type: 'response.completed', response: { status: 'completed', output: [{ type: 'function_call', call_id: 'call-9', name: 'lookup', arguments: '{"q":"问题"}' }], usage: { total_tokens: 15 } } },
+  ].map(value => 'data: ' + JSON.stringify(value) + '\n\n').join('') + 'data: [DONE]\n\n';
+  const bytes = new TextEncoder().encode(frames);
+  const stream = new ReadableStream({ start(controller) { for (let i = 0; i < bytes.length; i += 9) controller.enqueue(bytes.slice(i, i + 9)); controller.close(); } });
+  const value = await readResponsesResponse(new Response(stream, { headers: { 'content-type': 'text/event-stream' } }));
+  assert.equal(value.finishReason, 'tool_calls'); assert.equal(value.message.tool_calls[0].function.arguments, '{"q":"问题"}');
+  assert.equal(value.usage.total_tokens, 15);
+  await assert.rejects(readResponsesResponse(new Response('data: {"type":"response.failed"}\n\n', { headers: { 'content-type': 'text/event-stream' } })),
+    error => error.code === 'MODEL_RESPONSE');
+});
+
+test('provider format defaults to chat, persists, and a pasted endpoint suffix is normalized', async t => {
+  const f = fixture(t, []);
+  await f.prepare();
+  assert.equal(f.providers.get('test').apiFormat, 'chat');
+  const saved = await f.providers.save({ id: 'test', name: '测试', baseURL: 'http://127.0.0.1:12345/v1/responses', models: [{ id: 'm' }], apiFormat: 'responses' }, 'test-private-key');
+  assert.equal(saved.providers[0].baseURL, 'http://127.0.0.1:12345/v1');
+  assert.equal(saved.providers[0].apiFormat, 'responses');
 });

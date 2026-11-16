@@ -51,16 +51,23 @@ export function useUpdate({ autoCheck = true, delay = 4000 } = {}) {
       return null;
     }
     const value = reply.value || {};
-    setState({
-      ...idle,
-      phase: value.status === 'available' ? 'available' : 'current',
-      version: value.version || '',
-      currentVersion: value.currentVersion || '',
-      size: value.size || 0,
-      releaseDate: value.releaseDate || '',
-      pageURL: value.pageURL || '',
-      total: value.size || 0,
-      checkedAt: Date.now(),
+    const version = value.version || '';
+    setState(current => {
+      // A finished download survives re-checking the same version; rebuilding the
+      // state from `idle` made the app fetch the same 200 MB package again.
+      if (current.phase === 'ready' && current.version && current.version === version)
+        return { ...current, currentVersion: value.currentVersion || current.currentVersion, checkedAt: Date.now() };
+      return {
+        ...idle,
+        phase: value.status === 'available' ? 'available' : 'current',
+        version,
+        currentVersion: value.currentVersion || '',
+        size: value.size || 0,
+        releaseDate: value.releaseDate || '',
+        pageURL: value.pageURL || '',
+        total: value.size || 0,
+        checkedAt: Date.now(),
+      };
     });
     return value;
   }, [bridge, supported]);

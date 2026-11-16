@@ -25,8 +25,8 @@ export function stickerListRequest(index = 0): Buffer {
 export function stickerListResponse(body: Buffer, previousIndex = 0) {
   const list = fields(body); status(list);
   const index = Number(one(list, 2, 0)), end = one(list, 4, 0);
-  if (!Number.isSafeInteger(index) || index < previousIndex || index > 0xffffffff || ![0n, 1n].includes(end as bigint) || end === 0n && index <= previousIndex)
-    fail('微信表情分页没有前进，未把不完整列表当作同步成功');
+  if (!Number.isSafeInteger(index) || index < previousIndex || index > 0xffffffff || ![0n, 1n].includes(end as bigint))
+    fail('微信表情分页参数无效');
   const digestFields = list.filter(field => field.tag === 3), imageFields = list.filter(field => field.tag === 5);
   if (digestFields.length > 500 || imageFields.length > 500 || [...digestFields, ...imageFields].some(field => field.wire !== 2)) fail('微信表情列表超过读取范围');
   const digests = digestFields.map(field => (field.value as Buffer).toString('utf8').toLowerCase());
@@ -38,7 +38,14 @@ export function stickerListResponse(body: Buffer, previousIndex = 0) {
     if (!stickerMd5(md5) || urls.has(md5) || url.length > 16384 || digests.length && !digests.includes(md5)) fail('微信表情图片与本页列表不匹配');
     urls.set(md5, url);
   }
-  return { index, complete: end === 1n, items: (digests.length ? digests : [...urls.keys()]).map(md5 => ({ md5, url: urls.get(md5) || '' })) };
+  const items = (digests.length ? digests : [...urls.keys()]).map(md5 => ({ md5, url: urls.get(md5) || '' }));
+  // WeChat reports "no more pages" with NextStart=0, which an empty favourites list
+  // returns on its very first page; that is a complete, empty collection rather than
+  // a broken pager. With items present the same answer means the cursor never moved,
+  // and the incomplete list must not be published as a successful sync.
+  const stalled = end === 0n && index <= previousIndex;
+  if (stalled && items.length) fail('微信表情分页没有前进，未把不完整列表当作同步成功');
+  return { index, complete: end === 1n || stalled, items };
 }
 
 export interface StickerSend { md5: string; to: string; clientId: string; time: number; baseRequest: Buffer }

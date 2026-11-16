@@ -910,25 +910,23 @@ export class LongTermMemory {
         section = current.sections.find((section) => section.key === selector.key),
         added = 0;
       const additions = [],
-        corrections = new Set(
-          proposed
-            .filter((fact) => !fact.subjectId &&
-              fact.replaces.every(
-                (id) => normalize(existing.find((value) => value.id === id)?.text || '') === normalize(fact.text)
-              )
-            )
-            .flatMap((fact) => fact.replaces)
-        );
+        corrections = new Set();
       // Deduplicate against facts that will remain active. Otherwise a
       // same-wording correction would retire the old fact and omit its replacement.
       const signature = fact => JSON.stringify([fact.subjectId || '', normalize(fact.text)]);
-      const texts = new Set(existing.filter((fact) => !corrections.has(fact.id)).map(signature));
+      const texts = new Set(existing.map(signature));
       for (const fact of proposed) {
         if (fact.expiresAt <= this.now()) continue;
         if (texts.has(signature(fact)) && !fact.replaces.length) continue;
         if (fact.subjectId && section?.facts.some(old => old.subjectId === fact.subjectId && normalize(old.text) === normalize(fact.text) &&
             fact.sources.every(id => old.sources.some(source => source.key === batch[Number(id.slice(1)) - 1].key)))) continue;
-        const pending = fact.state === 'pending' || fact.replaces.some((id) => !corrections.has(id));
+        // Only a fact that is really written may retire the fact it corrects;
+        // otherwise the old fact is superseded and its replacement never exists.
+        const selfCorrection = !fact.subjectId && fact.replaces.every(
+          (id) => normalize(existing.find((value) => value.id === id)?.text || '') === normalize(fact.text)
+        );
+        if (selfCorrection) for (const id of fact.replaces) corrections.add(id);
+        const pending = fact.state === 'pending' || (fact.replaces.length > 0 && !selfCorrection);
         const metadata = {
           id: randomUUID(),
           state: pending ? 'pending' : 'active',

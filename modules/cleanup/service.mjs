@@ -17,6 +17,9 @@ export class OwnerCleanup {
     const records = (manager, rows, { label, id = row => row.id, protectedRow = () => false, remove, note = evidenceNote }) => {
       if (!manager || manager.error) fail(manager?.error || '记录组件尚未就绪');
       return { label, note, rows: rows.filter(row => row.accountId === accountId && !hidden(row)).map(row => ({ id: id(row), version: digest(row), protected: protectedRow(row), row })),
+        // Hidden rows stay as de-duplication evidence. Each collection's `remove`
+        // already strips the bulky payload (text, images, errors), so what remains is
+        // a few dozen bytes per interaction rather than a copy of the conversation.
         remove: selected => { for (const entry of selected) { entry.row.historyDeleted = true; remove?.(entry.row); } manager.save(); } };
     };
     if (kind === 'moments.publishing') {
