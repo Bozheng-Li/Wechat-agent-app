@@ -1,5 +1,5 @@
 import { promptText } from "../../prompts/loader.mjs";
-import { ChannelError, eligible, messageText } from "../../shared/contracts.mjs";
+import { ChannelError, messageText } from "../../shared/contracts.mjs";
 import { identity } from "../../backend/storage/keys.mjs";
 import { randomUUID } from 'node:crypto';
 import { NATURAL_REASONS } from "./natural-chat.mjs";
@@ -7,7 +7,7 @@ import { matches } from "./helpers.mjs";
 import { remoteCommand } from '../remote/commands/index.mjs';
 import { naturalRemoteRequest } from '../remote/intent/index.mjs';
 import { unavailableMessage } from '../../shared/message-content.mjs';
-import { conversationAuthorized } from '../../shared/authorization.mjs';
+import { conversationAuthorized, conversationEligible } from '../../shared/authorization.mjs';
 
 export function receiveMessage(channel, message, accountId) {
   if (
@@ -34,7 +34,7 @@ export function receiveMessage(channel, message, accountId) {
     const key = identity([account.id, message.chatType, message.peerId, message.serverMessageId || message.id]);
     if (Object.hasOwn(channel.store.data.seen, key)) return;
     const settings = channel.store.settings(account.id);
-    if (!eligible(settings, message)) {
+    if (!conversationEligible(channel.store, { ...message, accountId: account.id })) {
       channel.store.remember(key, channel.now());
       return;
     }
@@ -263,7 +263,7 @@ export function observeManualReply(channel, message, accountId) {
       !Number.isFinite(age) ||
       age < -60000 ||
       age > 600000 ||
-      !eligible(channel.store.settings(accountId), message)
+      !conversationEligible(channel.store, { ...message, accountId })
     )
       return;
     const config = channel.store.conversationSettings(accountId, message.chatType, message.peerId);
@@ -354,10 +354,17 @@ export function enqueueNaturalReply(
       : null;
   const reason = localReason || (channel.queue.length >= 100 ? 'waiting' : null);
   const natural = channel.natural.opportunityState(config, state, record.key, reason, trigger);
-  if (reason) Object.assign(record, { state: 'skipped', naturalReason: reason, reason: NATURAL_REASONS[reason] });
+  if (reason) {
+    // "Still resting" / "queue full" repeats on every tick. One coalesced row per
+    // conversation keeps the explanation without adding thousands of rows a day.
+    const skipKey = 'natural-skip:' + [selector.accountId, selector.chatType, selector.peerId].join(':');
+    channel.store.remember(skipKey, channel.now(),
+      { ...record, key: skipKey, state: 'skipped', naturalReason: reason, reason: NATURAL_REASONS[reason] },
+      { ...(observation || {}), natural });
+    return;
+  }
   if (observation) channel.store.remember(record.key, channel.now(), record, { ...observation, natural });
   else channel.store.add(record, { natural });
-  if (reason) return;
   const followup = state.followup;
   const taskText =
     trigger === 'followup'

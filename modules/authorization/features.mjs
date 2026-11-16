@@ -4,6 +4,7 @@ import { unlinkOwned } from './files.mjs';
 import { purgeMomentsData } from './moments.mjs';
 import { revokedMessageKeys, relatedRecord } from './records.mjs';
 import { stateBackupScopes, purgeStateBackups } from './backups.mjs';
+import { personAuthorized } from '../../shared/authorization.mjs';
 
 /** Discover existing scopes without exposing unauthorised content to a model.
  * This also covers authorisations removed while the application was stopped. */
@@ -102,7 +103,8 @@ function purgeConfiguration(channel, scopes) {
   if (JSON.stringify(image) !== JSON.stringify(store.config.section('imageMemory'))) store.config.update('imageMemory', image, store.data);
   const remote = store.config.section('remote'), people = new Set(scopes.filter(scope => scope.chatType === 'private').map(scope => scope.peerId));
   // Account authorisation is independent; administrators on another account retain their settings.
-  const stillAuthorized = id => Object.values(store.data.accounts).some(settings => settings.privatePeers.includes(id));
+  const stillAuthorized = id => Object.entries(store.data.accounts).some(([accountId]) =>
+    personAuthorized(store, accountId, id));
   const globalAdminIds = remote.globalAdminIds.filter(id => !people.has(id) || stillAuthorized(id));
   if (globalAdminIds.length !== remote.globalAdminIds.length) {
     const next = store.config.snapshot(store.data);

@@ -2,12 +2,19 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { atomicJson } from "../../backend/storage/atomic-json.ts";
-import { ChannelError, schedulesEnabled, authorizedConversation } from "../../shared/contracts.mjs";
-import { assertConversationAuthorized, assertPersonAuthorized } from '../../shared/authorization.mjs';
+import { ChannelError, schedulesEnabled } from "../../shared/contracts.mjs";
+import { assertConversationAuthorized, assertPersonAuthorized, conversationAuthorized } from '../../shared/authorization.mjs';
 
 const clone = (value) => structuredClone(value);
 const active = new Set(['pending', 'running']);
 const MAX_TASK_TARGETS = 20;
+// A failing one-off task used to retry every minute for ever; keep a bounded
+// budget with exponential backoff, then pause it for the owner to inspect.
+const MAX_RETRY_ATTEMPTS = 5;
+const MAX_RETRY_DELAY_MS = 60 * 60 * 1000;
+// The run log is append-only; a 1-minute interval task would otherwise grow
+// schedules.json by half a million rows a year.
+const MAX_RUNS = 2000;
 const memberId = (value) =>
   typeof value === 'string' &&
   /^[\w@.:-]{1,256}$/.test(value) &&
@@ -149,7 +156,9 @@ export class TaskScheduler {
             ? 'paused'
             : 'pending';
         if (sent && task.schedule.kind !== 'once') task.nextRunAt = scheduleNext(task.schedule, now());
-        task.lastState = sent ? 'sent' : uncertain ? 'unknown' : 'cancelled';
+        // A pre-send interruption is retried right away, so the attempt "failed";
+        // recording it as "cancelled" told the owner their reminder was dropped.
+        task.lastState = sent ? 'sent' : uncertain ? 'unknown' : 'failed';
         task.lastError = sent
           ? null
           : uncertain
@@ -169,11 +178,19 @@ export class TaskScheduler {
     channel.authorization?.reconcile();
   }
   save() {
+    this.pruneRuns();
     try {
       atomicJson(this.file, this.data);
     } catch {
       throw new ChannelError('STATE_WRITE_FAILED', '定时任务状态未能保存，已停止本次调度，请检查磁盘和目录权限');
     }
+  }
+  pruneRuns() {
+    const runs = this.data.runs;
+    if (!Array.isArray(runs) || runs.length <= MAX_RUNS) return;
+    const referenced = new Set(this.data.tasks.map((task) => task.runId).filter(Boolean));
+    const newest = new Set(runs.slice(-MAX_RUNS).map((run) => run.id));
+    this.data.runs = runs.filter((run) => newest.has(run.id) || referenced.has(run.id));
   }
   authorized(selector, fromChat = false) {
     assertConversationAuthorized(this.store, selector);
@@ -181,7 +198,7 @@ export class TaskScheduler {
     const settings = this.store.settings(selector.accountId);
     if (!schedulesEnabled(settings))
       throw new ChannelError('TASK_NOT_AUTHORIZED', '定时任务已在自动功能中关闭，未执行本次任务');
-    if (!authorizedConversation(settings, selector))
+    if (!conversationAuthorized(this.store, selector))
       throw new ChannelError('TASK_NOT_AUTHORIZED', '该会话未授权，未执行定时任务');
     if (
       fromChat &&
@@ -410,6 +427,7 @@ export class TaskScheduler {
     const previous = clone(task);
     task.state = 'pending';
     task.retryAt = null;
+    delete task.attempts;
     task.revision++;
     task.updatedAt = this.now();
     try {
@@ -450,6 +468,12 @@ export class TaskScheduler {
   }
   start() {
     this.stopped = false;
+    // A run that stopped on an error left its interval alive: installing another
+    // one points this.timer at the new handle and leaks the old 1 Hz timer.
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
     this.timer = setInterval(() => {
       void this.tick().catch((error) => {
         this.error = error instanceof ChannelError ? error.message : '任务调度异常，已停止自动执行';
@@ -486,7 +510,13 @@ export class TaskScheduler {
         continue;
       try {
         this.authorized(task, task.source === 'chat');
-      } catch {
+      } catch (error) {
+        // Silently skipping left the task "overdue" forever with no explanation.
+        const message = error instanceof ChannelError ? error.message : '任务目标未通过授权检查';
+        if (task.lastError !== message) {
+          task.lastError = message;
+          this.save();
+        }
         continue;
       }
       const controller = new AbortController(),
@@ -532,7 +562,12 @@ export class TaskScheduler {
               (!record.sendAttempted || ['rejected', 'not-sent'].includes(record.delivery));
             task.state = safe ? 'pending' : 'paused';
             if (safe) {
-              task.retryAt = this.now() + this.retryMs;
+              const attempt = (task.attempts = (task.attempts || 0) + 1);
+              if (attempt >= MAX_RETRY_ATTEMPTS) {
+                task.state = 'paused';
+                task.lastError = `${run.reason || '任务连续执行失败'}；已连续失败 ${attempt} 次并暂停，请检查目标后手动恢复`;
+                delete task.retryAt;
+              } else task.retryAt = this.now() + Math.min(this.retryMs * 2 ** (attempt - 1), MAX_RETRY_DELAY_MS);
               if (record.replyDraft) {
                 task.retryText = record.replyDraft;
                 task.retryAsset = record.replyMedia;
@@ -541,10 +576,20 @@ export class TaskScheduler {
           } else if (task.schedule.kind === 'once') task.state = 'completed';
           else {
             task.state = 'pending';
-            task.nextRunAt = scheduleNext(task.schedule, this.now());
+            // Advance from the scheduled slot, not from "now": otherwise a task
+            // that takes 40s to run drifts by 40s on every single round.
+            let next = scheduleNext(task.schedule, task.nextRunAt ?? this.now());
+            if (task.schedule.kind === 'interval') {
+              const interval = task.schedule.minutes * 60000;
+              // Land strictly in the future: "due right now" would run the same
+              // minute twice after a long downtime.
+              if (next <= this.now() && interval > 0) next += (Math.floor((this.now() - next) / interval) + 1) * interval;
+            } else for (let guard = 0; next <= this.now() && guard < 512; guard++) next = scheduleNext(task.schedule, next);
+            task.nextRunAt = next;
           }
           if (record.state === 'sent') {
             delete task.retryAt;
+            delete task.attempts;
             delete task.retryText;
             delete task.retryAsset;
           }
@@ -559,8 +604,16 @@ export class TaskScheduler {
         task.lastError = run.reason;
         if (task.state === 'running') {
           const record = this.store.data.records.find((value) => value.key === task.recordKey);
-          task.state = record?.sendAttempted ? 'paused' : 'pending';
-          task.retryAt = this.now() + this.retryMs;
+          const attempt = (task.attempts = (task.attempts || 0) + 1);
+          if (record?.sendAttempted || attempt >= MAX_RETRY_ATTEMPTS) {
+            task.state = 'paused';
+            if (attempt >= MAX_RETRY_ATTEMPTS && !record?.sendAttempted)
+              task.lastError = `${run.reason}；已连续失败 ${attempt} 次并暂停，请检查目标后手动恢复`;
+            delete task.retryAt;
+          } else {
+            task.state = 'pending';
+            task.retryAt = this.now() + Math.min(this.retryMs * 2 ** (attempt - 1), MAX_RETRY_DELAY_MS);
+          }
         }
       } finally {
         task.updatedAt = this.now();

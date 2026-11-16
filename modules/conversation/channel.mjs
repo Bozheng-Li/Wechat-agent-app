@@ -8,7 +8,7 @@ import { processReply } from "./reply.mjs";
 import { scheduleMemoryMaintenance } from "./memory-maintenance.mjs";
 import { checkMemoryPressure } from "./memory-maintenance.mjs";
 import { maintainConversationMemory } from "./memory-maintenance.mjs";
-import { ChannelError, eligible, authorizedConversation, schedulesEnabled, publicError } from "../../shared/contracts.mjs";
+import { ChannelError, schedulesEnabled, publicError } from "../../shared/contracts.mjs";
 import { identity } from "../../backend/storage/keys.mjs";
 import { ConversationMemory } from "../memory/conversation/store.mjs";
 
@@ -28,6 +28,8 @@ import { MomentsAutomation } from '../moments/automation.mjs';
 import { PersonMemoryMaintenance } from '../memory/roles/maintenance.mjs';
 import { attachExecutionTraces } from '../traces/instrument.mjs';
 import { ObjectAuthorization } from '../authorization/service.mjs';
+import { conversationAuthorized, conversationEligible } from '../../shared/authorization.mjs';
+import { GroupMemberIndex } from '../authorization/members.mjs';
 
 export class WechatChannel {
   get timeoutMs() { return this.timeoutOverride ?? timeLimitMs(this.store, 'conversationTimeoutSeconds'); }
@@ -76,6 +78,7 @@ export class WechatChannel {
     this.memory.forcedState = this.memoryForced;
     this.natural = new NaturalChat(this);
     this.authorization = new ObjectAuthorization(this);
+    this.groupMembers = new GroupMemberIndex(this);
     attachExecutionTraces(this);
     this.imageMemory.start();
     this.memoryTimer = setInterval(() => this.checkMemoryPressure(), 15000);
@@ -160,9 +163,10 @@ export class WechatChannel {
     const status = this.transport.status(), settings = this.store.settings(item.record.accountId);
     // Scheduled sends are owned by the task scheduler and answer to the 定时任务
     // switch; ordinary replies answer to 自动回复.
+    const scope = { ...item.message, accountId: item.record.accountId };
     const permitted = item.scheduled
-      ? authorizedConversation(settings, item.message) && schedulesEnabled(settings)
-      : eligible(settings, item.message);
+      ? conversationAuthorized(this.store, scope) && schedulesEnabled(settings)
+      : conversationEligible(this.store, scope);
     if (
       this.closed ||
       this.fault ||
@@ -346,6 +350,7 @@ export class WechatChannel {
     this.natural.stop();
     this.imageMemory.close();
     this.closed = true;
+    this.groupMembers?.close();
     this.authorization?.close();
     const stickersClosing = this.stickers.close();
     const peopleClosing = this.personMemory?.close();

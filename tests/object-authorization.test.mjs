@@ -223,13 +223,23 @@ test('unauthorised incoming and manual messages create no records, sources or pe
   assert.equal(f.store.roleCards.list(f.accountId).length, 0); assert.equal(f.models.length, 0);
 });
 
-test('authorising a group never authorises its members for person cards or friend moments', async t => {
+test('a confirmed group roster authorizes its members for person cards and friend moments', async t => {
   const f = fixture(t); f.append(f.scope('room@chatroom'), 'outsider', '我喜欢抹茶。');
+  // 名单还没核对过：群里出现过的人不算已授权，先不扩大授权。
   assert.equal(personAuthorized(f.store, f.accountId, 'outsider'), false);
   assert.throws(() => f.store.roleCards.view({ accountId: f.accountId, personId: 'outsider' }), { code: 'OBJECT_NOT_AUTHORIZED' });
   assert.equal(fs.existsSync(f.store.roleCards.paths({ accountId: f.accountId, personId: 'outsider' }).observationsFile), false);
   await assert.rejects(f.transport.readMoments({ accountId: f.accountId, query: { action: 'user', userId: 'outsider' } }), { code: 'OBJECT_NOT_AUTHORIZED' });
   assert.equal(f.reads.length, 0);
+
+  // 核对到群成员名单之后，成员默认就是已授权人物：资料、朋友圈和私聊都不必再单独授权。
+  f.store.saveGroupMemberIndex(f.accountId, { 'room@chatroom': { ids: ['outsider'] } });
+  assert.equal(personAuthorized(f.store, f.accountId, 'outsider'), true);
+  assert.doesNotThrow(() => f.store.roleCards.view({ accountId: f.accountId, personId: 'outsider' }));
+  await assert.doesNotReject(f.transport.readMoments({ accountId: f.accountId, query: { action: 'user', userId: 'outsider' } }));
+  assert.equal(f.reads.length, 1);
+  // 不在授权群名单里的人依然不能访问。
+  await assert.rejects(f.transport.readMoments({ accountId: f.accountId, query: { action: 'user', userId: 'stranger' } }), { code: 'OBJECT_NOT_AUTHORIZED' });
 });
 
 test('timeline, likes and comments are filtered before models, person-memory capture and transport results', async t => {

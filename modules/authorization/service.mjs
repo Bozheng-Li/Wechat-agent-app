@@ -1,5 +1,5 @@
-import { ChannelError, authorizedConversation, schedulesEnabled, momentsEnabled, publishScopeOf } from '../../shared/contracts.mjs';
-import { assertConversationAuthorized, personAuthorized, authorizationEpoch, assertAuthorizationEpoch } from '../../shared/authorization.mjs';
+import { ChannelError, schedulesEnabled, momentsEnabled, publishScopeOf } from '../../shared/contracts.mjs';
+import { assertConversationAuthorized, personAuthorized, conversationScopeAuthorized, authorizedPeople, authorizationEpoch, assertAuthorizationEpoch } from '../../shared/authorization.mjs';
 import { filterAuthorizedMoments, filterAuthorizedMomentsImages, assertMomentTargetAuthorized, assertMomentReplyAuthorized } from '../moments/read.mjs';
 import { purgeConversationData } from './conversations.mjs';
 import { purgeFeatureData, storedObjectScopes } from './features.mjs';
@@ -10,12 +10,16 @@ const stopping = () => new ChannelError('AUTHORIZATION_CHANGED', '对象授权�
 
 const paused = (message) => new ChannelError('AUTOMATION_PAUSED', message);
 
+/** After this many failed purges the account stops blocking unrelated work. */
+const STUCK_AFTER = 5;
+
 /** Current object authorization applies to owner actions, models and timers.
  * Revocations are journaled before cancellation and resumed after a restart. */
 export class ObjectAuthorization {
   constructor(channel) {
     this.channel = channel; this.controllers = new Map(); this.calls = new Set(); this.pending = Promise.resolve();
     this.closed = false; this.cleaning = new Set(); this.originals = [];
+    this.attempts = new Map(); this.stuck = new Set();
     this.onChange = change => this.changed(change);
     channel.store.onAuthorizationChange = this.onChange;
     const wrap = (name, prepare, finish = value => value, receipt = false) => {
@@ -90,7 +94,7 @@ export class ObjectAuthorization {
     workbench.call = wrapped; this.originals.push({ object: workbench, name: 'call', original, wrapped });
     this.ready = this.reconcile();
   }
-  people(accountId) { return this.channel.store.settings(accountId).privatePeers.filter(id => personAuthorized(this.channel.store, accountId, id)); }
+  people(accountId) { return authorizedPeople(this.channel.store, accountId); }
   combine(accountId, signal) {
     let controller = this.controllers.get(accountId);
     if (!controller) { controller = new AbortController(); this.controllers.set(accountId, controller); }
@@ -120,6 +124,8 @@ export class ObjectAuthorization {
     finally { combined.removeEventListener('abort', listener); this.calls.delete(call); }
   }
   changed({ accountId, before, settings, revoked }) {
+    // A new or removed group changes who is covered, so refresh its members.
+    this.channel.groupMembers?.wake(0);
     const replies = !!before && before.enabled === true && settings.enabled === false;
     const schedules = !!before && schedulesEnabled(before) && !schedulesEnabled(settings);
     const moments = !!before && momentsEnabled(before) && !momentsEnabled(settings);
@@ -143,6 +149,8 @@ export class ObjectAuthorization {
       if (automation?.interactions?.active?.accountId === accountId) automation.interactions.active.controller.abort(pause);
       if (automation?.interactions?.automation?.active?.accountId === accountId) automation.interactions.automation.active.controller.abort(pause);
     }
+    // A fresh revocation gets a fresh freeze and a fresh retry budget.
+    for (const scope of revoked) { this.attempts.delete(scope.accountId); this.stuck.delete(scope.accountId); }
     this.enqueue(revoked);
   }
   enqueue(scopes = []) {
@@ -150,9 +158,20 @@ export class ObjectAuthorization {
     const selected = structuredClone(scopes);
     this.pending = this.pending.catch(() => {}).then(() => this.purge(selected)).catch(error => {
       this.error = '授权已撤销，部分数据清理未完成：' + error.message;
+      // A cleanup that keeps failing must not freeze every conversation of the
+      // account for ever: past a few attempts the remaining scopes stay blocked
+      // by the ordinary per-scope check while the retry slows down instead.
+      let slowest = 0;
+      for (const { accountId } of selected) {
+        const attempts = (this.attempts.get(accountId) ?? 0) + 1;
+        this.attempts.set(accountId, attempts);
+        slowest = Math.max(slowest, attempts);
+        if (attempts >= STUCK_AFTER) this.stuck.add(accountId);
+      }
       if (!this.closed) {
         clearTimeout(this.retryTimer);
-        this.retryTimer = setTimeout(() => this.enqueue(this.channel.store.data.authorizationRevocations), 30000);
+        const delay = Math.min(30000 * 2 ** Math.min(Math.max(slowest, 1) - 1, 3), 300000);
+        this.retryTimer = setTimeout(() => this.enqueue(this.channel.store.data.authorizationRevocations), delay);
         this.retryTimer.unref?.();
       }
       throw error;
@@ -161,15 +180,31 @@ export class ObjectAuthorization {
   }
   reconcile() {
     const { channel } = this;
-    const scopes = storedObjectScopes(channel).filter(scope => !authorizedConversation(channel.store.settings(scope.accountId), scope));
+    const scopes = storedObjectScopes(channel).filter(scope => !conversationScopeAuthorized(channel.store, scope));
     if (scopes.length) {
       const rows = channel.store.data.authorizationRevocations;
-      for (const scope of scopes) if (!rows.some(row => row.accountId === scope.accountId && row.chatType === scope.chatType && row.peerId === scope.peerId)) rows.push(scope);
+      for (const scope of scopes) if (!rows.some(row => row.accountId === scope.accountId && row.chatType === scope.chatType && row.peerId === scope.peerId)) {
+        rows.push(scope);
+        this.attempts.delete(scope.accountId);
+        this.stuck.delete(scope.accountId);
+      }
+      // Rows for scopes the owner has authorised again must not stay queued: a
+      // stale revocation would delete freshly restored conversation data later.
+      const live = new Set(scopes.map(scope => [scope.accountId, scope.chatType, scope.peerId].join('\u0000')));
+      const kept = rows.filter(row => live.has([row.accountId, row.chatType, row.peerId].join('\u0000')));
+      if (kept.length !== rows.length) { rows.length = 0; rows.push(...kept); }
       channel.store.save();
     }
     return this.enqueue(channel.store.data.authorizationRevocations);
   }
-  isCleaning(accountId) { return this.cleaning.has(accountId) || this.channel.store.data.authorizationRevocations.some(row => row.accountId === accountId); }
+  isCleaning(accountId) {
+    // The scopes are already denied by the ordinary authorization check while
+    // they are pending; the account-wide freeze is only needed while a purge is
+    // actually making progress, not for an unbounded stream of failed retries.
+    if (this.cleaning.has(accountId)) return true;
+    if (this.stuck.has(accountId)) return false;
+    return this.channel.store.data.authorizationRevocations.some(row => row.accountId === accountId);
+  }
   async purge(scopes) {
     const { channel } = this, accounts = new Set(scopes.map(row => row.accountId));
     const resumes = [...accounts].map(accountId => channel.pause('正在清空撤销授权的数据', { accountId }));
@@ -199,9 +234,14 @@ export class ObjectAuthorization {
       for (const map of [channel.momentOwners, channel.momentCommentOwners]) for (const key of map?.keys() || [])
         if ([...accounts].some(accountId => key.startsWith(accountId + ':'))) map.delete(key);
       channel.personMemory.nextScanAt = 0; channel.personMemory.wake(0);
+      for (const accountId of accounts) {
+        this.attempts.delete(accountId);
+        this.stuck.delete(accountId);
+      }
     } finally {
       for (const accountId of accounts) this.cleaning.delete(accountId);
       for (const resume of resumes.reverse()) resume();
+      if (!this.closed) this.channel.groupMembers?.wake(0);
     }
   }
   async whenIdle() { await this.pending; }

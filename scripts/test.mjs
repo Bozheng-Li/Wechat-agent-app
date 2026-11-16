@@ -4,19 +4,21 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 // Shared business regressions. Host integration is replaced by app-* and desktop smoke tests.
+// package-resources and source-structure need a packaged release tree, so they stay out of this
+// run; every other suite that covers business logic belongs in this list.
 const business = [
   'automatic-memory-compaction', 'authorization-backups', 'chat-image-generation', 'contact-classification', 'conversation-preferences', 'data-root',
-  'execution-traces', 'execution-traces-graph', 'execution-traces-skip', 'image-memory', 'image-reply-grounding',
+  'execution-traces', 'execution-traces-graph', 'execution-traces-skip', 'group-member-authorization', 'image-memory', 'image-reply-grounding',
   'inbound-files', 'inbound-images', 'media-library', 'media-channel-integration', 'memory-retention',
   'memory-scan-performance', 'moments-arrangement', 'moments-automation', 'moments-default-audience', 'moments-friend-replies',
   'moments-image-stream', 'moments-interaction-automation', 'moments-interactions', 'moments-likes',
   'moments-materials', 'moments-person-memory', 'moments-publication-recovery', 'moments-publish-scope', 'moments-publishing',
   'moments-read-authorization', 'moments-recency', 'moments-subject', 'moments-tools', 'natural-chat',
   'object-authorization', 'outbound-media', 'owner-cleanup', 'person-role-cards', 'persona-input',
-  'quiet-replies', 'received-files', 'reply-context', 'reply-context-budget', 'reply-style', 'role-card-groups',
+  'quiet-replies', 'received-files', 'release-version', 'reply-context', 'reply-context-budget', 'reply-style', 'role-card-groups',
   'role-memory-authorization', 'role-memory-practical', 'role-memory-production', 'schedule-countdown',
-  'scheduled-features', 'sticker-library', 'sticker-service', 'sticker-tools', 'storage-v2',
-  'task-history', 'task-mentions', 'time-settings', 'worker-send-account', 'worker-transfer-wait', 'yaml-configuration',
+  'scheduled-features', 'search-fallback', 'sticker-library', 'sticker-service', 'sticker-tools', 'storage-v2',
+  'task-history', 'task-mentions', 'time-settings', 'web-search', 'worker-send-account', 'worker-transfer-wait', 'workspace-root', 'yaml-configuration',
 ];
 const files = [...fs.readdirSync(path.join(root, 'tests')).filter(name => /^app-.*\.test\.mjs$/.test(name)), ...business.map(name => name + '.test.mjs')];
 const child = spawn(process.execPath, ['--test', '--test-concurrency=1', ...files.map(name => path.join(root, 'tests', name))], { cwd: root, windowsHide: true, stdio: 'inherit' });
