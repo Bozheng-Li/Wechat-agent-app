@@ -2,35 +2,69 @@ import { ChannelError } from '../../../shared/contracts.mjs';
 import { ROLE_CARD_LABELS, emptyRoleCard } from '../../../shared/role-card.mjs';
 import { ROLE_CARD_READING_PROMPT } from '../../../prompts/memory/role-card.mjs';
 import { relevantMemoryReference } from '../query/tool.mjs';
-import { nameMentioned } from './references.mjs';
+import { recentRoleHistory, roleNameMentioned } from './retrieval.mjs';
 import { personAuthorized } from '../../../shared/authorization.mjs';
 
 function peopleFor(channel, scope, { history = [], participants = [] } = {}) {
-  const cards = channel.store.roleCards.list(scope.accountId, { includePending: true });
+  const cards = channel.store.roleCards.list(scope.accountId, { includePending: true }).filter(view =>
+    (!view.scope?.accountId || view.scope.accountId === scope.accountId) && personAuthorized(channel.store, scope.accountId, view.personId));
   const known = new Map(cards.map(view => [view.personId, { id: view.personId,
-    name: view.card.label || view.aliases.at(-1) || view.personId, aliases: view.aliases, view }]));
+    name: readableRoleCard(view, scope.requestedAt ?? Infinity).card.label || view.aliases.at(-1) || view.personId, aliases: view.aliases, view }]));
   const add = (id, name) => {
     if (!id || id === scope.accountId || id.endsWith('@chatroom') || !personAuthorized(channel.store, scope.accountId, id)) return;
     const previous = known.get(id);
     known.set(id, { ...previous, id, name: previous?.name === id ? name || id : previous?.name || name || id,
       aliases: [...new Set([...(previous?.aliases || []), name].filter(Boolean))] });
   };
-  for (const row of history) if (row.direction === 'incoming') add(row.senderId, row.senderName || row.sender);
+  for (const row of recentRoleHistory({ scope, history, beforeTime: scope.requestedAt }, Infinity, Infinity))
+    if (row.direction === 'incoming') add(row.senderId, row.senderName || row.sender);
   for (const person of participants) add(person.id, person.name);
   add(scope.senderId || (scope.chatType === 'private' ? scope.peerId : ''), scope.senderName || scope.sender);
   return [...known.values()];
 }
 
 export function readableRoleCard(view, beforeTime = Infinity) {
-  const card = emptyRoleCard(), evidence = {};
-  const conflicts = view.conflicts.filter(row => row.at <= beforeTime);
-  for (const [field, value] of Object.entries(view.card)) {
-    const source = view.evidence[field], time = source?.sourceAt ?? source?.updatedAt ?? view.updatedAt ?? 0;
-    if (time > beforeTime || conflicts.some(row => row.field === field)) continue;
+  const card = emptyRoleCard(), evidence = {}, conflicts = [];
+  if (view.scope?.personId && view.scope.personId !== view.personId)
+    throw new ChannelError('ROLE_CARD_SCOPE', '人物资料与当前人物不匹配');
+  const deleted = view.deleted === true || view.tombstone === true || view.deletedAt != null || view.revokedAt != null;
+  const changes = (view.changes || []).map((row, index) => ({ ...row, index }))
+    .filter(row => Number.isFinite(row.at)).sort((a, b) => a.at - b.at || a.index - b.index);
+  for (const field of Object.keys(card)) {
+    let value = view.card[field], source = view.evidence[field];
+    let fieldConflicts = (view.conflicts || []).filter(row => row.field === field);
+    const future = changes.filter(row => row.field === field && row.at > beforeTime);
+    // Privacy deletions dominate a historical read, even when a newer value
+    // was later added. Revocation also clears the stored history upstream.
+    if (deleted || future.some(row => row.after === '')) continue;
+    if (!value) {
+      conflicts.push(...fieldConflicts.filter(row => row.at <= beforeTime));
+      continue;
+    }
+    let reliable = true;
+    for (const row of [...future].reverse()) {
+      if (row.after !== value || !Object.hasOwn(row, 'beforeEvidence') || !Array.isArray(row.beforeConflicts)) {
+        // Old bounded change rows do not prove the earlier source or conflict
+        // state. Never borrow a new quotation to support their `before` value.
+        reliable = false; break;
+      }
+      value = row.before; source = row.beforeEvidence;
+      fieldConflicts = row.beforeConflicts;
+    }
+    if (!reliable) continue;
+    fieldConflicts = (fieldConflicts || []).filter(row => row.field === field && row.at <= beforeTime);
+    conflicts.push(...fieldConflicts);
+    const time = source?.sourceAt ?? source?.updatedAt ?? view.updatedAt ?? 0;
+    const foreignSource = (source?.sources || []).some(row =>
+      row.senderId && row.senderId !== view.personId ||
+      row.accountId && view.scope?.accountId && row.accountId !== view.scope.accountId ||
+      row.time != null && (!Number.isFinite(row.time) || row.time > beforeTime) ||
+      row.deleted === true || row.tombstone === true);
+    if (!value || !Number.isFinite(time) || time > beforeTime || foreignSource || fieldConflicts.length) continue;
     card[field] = value;
-    if (source) evidence[field] = source;
+    if (source) evidence[field] = structuredClone(source);
   }
-  return { personId: view.personId, roleId: view.roleId, card, evidence, conflicts, revision: view.revision,
+  return { personId: view.personId, roleId: view.roleId, card, evidence, conflicts: structuredClone(conflicts), revision: view.revision,
     updatedAt: view.updatedAt, reviewedAt: view.reviewedAt, pendingCount: view.pendingCount,
     found: Object.values(card).some(Boolean), scope: '同一微信账号内按人物共享，跨私聊、群聊和朋友圈' };
 }
@@ -120,16 +154,18 @@ export function personRoleContext(channel, scope, { text = '', history = [], par
     const people = peopleFor(channel, scope, { history, participants });
     const primary = scope.senderId || (scope.chatType === 'private' ? scope.peerId : '');
     const selected = people.filter(person => person.id === primary || participants.some(row => row.id === person.id) ||
-      [person.name, ...person.aliases].some(name => nameMentioned(text, name)));
+      [person.name, ...person.aliases].some(name => roleNameMentioned(text, name)))
+      .sort((a, b) => Number(b.id === primary) - Number(a.id === primary));
     if (!selected.length && scope.chatType === 'group') {
-      const recent = new Set(history.filter(row => row.direction === 'incoming').slice(-3).map(row => row.senderId));
+      const recent = new Set(recentRoleHistory({ scope, history, beforeTime: scope.requestedAt })
+        .filter(row => row.direction === 'incoming').slice(-3).map(row => row.senderId));
       selected.push(...people.filter(person => recent.has(person.id)));
     }
     const lines = [];
     for (const person of selected.slice(0, 4)) {
       const view = person.view && readableRoleCard(person.view, scope.requestedAt ?? Infinity);
       const fields = Object.keys(view?.card || {}).filter(field => view.card[field]);
-      const data = { personId: person.id, name: person.name, availableFields: fields.map(field => ROLE_CARD_LABELS[field]),
+      const data = { personId: person.id, name: String(person.name).slice(0, 80), availableFields: fields.map(field => ROLE_CARD_LABELS[field]),
         ...(view?.conflicts.length ? { conflicts: view.conflicts.map(({ field, note }) => ({ field, note })) } : {}) };
       if (!onDemand) for (const field of ['addressAs', 'relationship', 'style', ...fields.filter(field => !['addressAs', 'relationship', 'style'].includes(field))]) {
         if (!view?.card[field] || !(['addressAs', 'relationship', 'style'].includes(field) ||
@@ -137,7 +173,14 @@ export function personRoleContext(channel, scope, { text = '', history = [], par
         const candidate = { ...data, card: { ...data.card, [field]: view.card[field] } };
         if (lines.join('\n').length + JSON.stringify(candidate).length <= maxChars - 150) data.card = candidate.card;
       }
-      const line = JSON.stringify(data);
+      let line = JSON.stringify(data);
+      if (person.id === primary && line.length > maxChars - 150) {
+        // Long conflict notes must not evict the actual recipient from the
+        // index. Keep field-level conflict visibility; the tool has details.
+        delete data.card;
+        if (data.conflicts) data.conflicts = data.conflicts.map(({ field }) => ({ field }));
+        line = JSON.stringify(data);
+      }
       if (lines.join('\n').length + line.length > maxChars - 150) continue;
       lines.push(line);
     }

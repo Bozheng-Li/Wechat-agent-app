@@ -5,6 +5,7 @@ export const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 export const personaDraft = (value = {}) => ({
   name: value.name || '微信助手',
   aliases: (value.aliases || []).join('\n'),
+  personaMode: value.personaMode || 'standard',
   prompt: personaText(value),
 });
 

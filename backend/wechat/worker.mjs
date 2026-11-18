@@ -25,6 +25,9 @@ function publicDeliveryParts(value) {
   if (!Array.isArray(value) || value.length > 256 || !value.every((part, index) => part?.index === index && ['text', 'image', 'face', 'file'].includes(part.type) &&
     ['acknowledged', 'unknown', 'not-sent'].includes(part.state) && (part.state !== 'acknowledged' || typeof part.serverMessageId === 'string' && part.serverMessageId && part.serverMessageId !== '0'))) return null;
   return value.map(part => ({ index: part.index, type: part.type, state: part.state, ...(part.state === 'acknowledged' ? { serverMessageId: part.serverMessageId } : {}),
+    ...(part.type === 'text' && typeof part.text === 'string' && part.text.length <= 24000 ? { text: part.text } : {}),
+    ...(part.state === 'acknowledged' && Number.isSafeInteger(part.time) && part.time > 0 ? { time: part.time } : {}),
+    ...(part.state === 'acknowledged' && Number.isSafeInteger(part.observedAt) && part.observedAt > 0 ? { observedAt: part.observedAt } : {}),
     ...(part.nativeFallback === true ? { nativeFallback: true } : {}),
     ...(typeof part.name === 'string' && part.name.length <= 240 && !/[\\/:\u0000-\u001f\u007f]/.test(part.name) && Number.isSafeInteger(part.bytes) && part.bytes > 0 && /^[a-f0-9]{64}$/.test(part.sha256) ? { name: part.name, bytes: part.bytes, sha256: part.sha256 } : {}) }));
 }

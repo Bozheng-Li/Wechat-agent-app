@@ -4,7 +4,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { deflateSync } from 'node:zlib';
-import { StateStore, WechatChannel, createPluginService, rpcHandler, ChannelError } from '../lib/testing.js';
+import { StateStore } from '../backend/storage/state-store.mjs';
+import { WechatChannel } from '../modules/conversation/channel.mjs';
+import { createPluginService } from '../backend/app/service.mjs';
+import { rpcHandler } from '../backend/rpc/handler.mjs';
+import { ChannelError } from '../shared/contracts.mjs';
 
 const accountId = 'media-integration-owner', peerId = 'media-integration@chatroom';
 const scope = { accountId, chatType: 'group', peerId };
@@ -19,7 +23,7 @@ function fixture(t) {
   const store = new StateStore(root), settings = { enabled: true, groups: [peerId], privatePeers: [], prompt: '' };
   store.configure(accountId, settings);
   const status = { online: true, account: { id: accountId, nickname: '本机测试账号' } }, sent = [], cleanup = [];
-  const worker = { status: () => structuredClone(status), send: async params => { sent.push(params); return { delivery: 'server-ack', serverMessageIds: ['9007199254740999'] }; } };
+  const worker = { status: () => structuredClone(status), send: async params => { sent.push(params); return { delivery: 'server-ack', serverMessageIds: [String(9007199254740999n + BigInt(sent.length))] }; } };
   const runner = { selection: () => ({ provider: 'fixture', model: 'fixture' }), defaultSelection: () => ({ provider: 'fixture', model: 'fixture' }) };
   const channel = new WechatChannel({ store, runner, transport: worker, random: () => 0 });
   channel.library.import(accountId, { name: '点头.png', kind: 'sticker', data: png().toString('base64') });
@@ -90,7 +94,8 @@ test('candidate stickers are pre-read, so a single send call is enough', async t
   assert.match(description, new RegExp(f.asset.name));
   assert.match(description, new RegExp(f.asset.id));
   assert.equal(f.record().state, 'sent');
-  assert.deepEqual(f.sent.at(-1).message.map(segment => segment.type), ['text', 'face']);
+  assert.deepEqual(f.sent.at(-1).message.map(segment => segment.type), ['face']);
+  assert.deepEqual(f.sent.at(-2).message.map(segment => segment.type), ['text']);
 });
 
 test('a sticker that was just sent stays available when it still fits', async t => {
@@ -109,7 +114,8 @@ test('a sticker that was just sent stays available when it still fits', async t 
   assert.equal(descriptions.length, 2);
   // Repeating a sticker is allowed, so the only sticker must still be offered next turn.
   assert.match(descriptions[1], new RegExp(f.asset.id));
-  assert.deepEqual(f.sent.at(-1).message.map(segment => segment.type), ['text', 'face']);
+  assert.deepEqual(f.sent.at(-1).message.map(segment => segment.type), ['face']);
+  assert.deepEqual(f.sent.at(-2).message.map(segment => segment.type), ['text']);
 });
 
 test('selected image enters history and memory only after the whole reply is server-acknowledged', async t => {
@@ -132,11 +138,19 @@ test('partial text confirmation never promotes its unconfirmed image into memory
     await read.execute({ action: 'read', assetId: f.asset.id }, { signal: input.signal });
     await send.execute({ assetId: f.asset.id, caption: '嗯嗯' }, { signal: input.signal }); return { text: '' };
   };
-  f.worker.send = async params => { f.sent.push(params); throw new ChannelError('ERR_SEND_REJECTED', 'fixture reject', { delivery: 'partially-acknowledged', acknowledgedMessageIds: ['9007199254740901'] }); };
+  f.worker.send = async params => {
+    f.sent.push(params);
+    if (params.message[0].type === 'text') return { delivery: 'server-ack', serverMessageIds: ['9007199254740901'],
+      deliveryParts: [{ index: 0, type: 'text', state: 'acknowledged', serverMessageId: '9007199254740901', text: params.message[0].data.text }] };
+    throw new ChannelError('ERR_SEND_REJECTED', 'fixture reject', { delivery: 'rejected' });
+  };
   f.receive(); await f.channel.whenIdle();
   assert.equal(f.record().state, 'partial'); assert.deepEqual(f.record().acknowledgedMessageIds, ['9007199254740901']);
   assert.match(f.record().reason, /fixture reject/);
-  assert.equal(f.outgoing().length, 0); assert.equal(f.sent[0].message.length, 2);
+  assert.equal(f.outgoing().length, 1); assert.equal(f.outgoing()[0].text, '嗯嗯');
+  assert.equal(f.outgoing()[0].attachments?.length || 0, 0); assert.equal(f.sent[0].message.length, 1);
+  assert.equal(f.sent.length, 2);
+  assert.deepEqual(f.record().deliveryParts.map(part => part.state), ['acknowledged', 'not-sent']);
 });
 
 test('unknown or malformed completion does not claim an image in memory', async t => {

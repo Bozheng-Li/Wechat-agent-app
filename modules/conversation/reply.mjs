@@ -20,6 +20,7 @@ import { momentsImagesTool } from '../tools/moments-images.mjs';
 import { chatMomentsMedia } from '../moments/media.mjs';
 import { momentsPublishingTools } from '../tools/moments-publishing.mjs';
 import { timeLimitMs } from '../../shared/time-settings.mjs';
+import { replySegments, splitChatReply } from '../../shared/chat-reply-split.mjs';
 import { personRoleCardTool, personRoleContext } from '../memory/roles/tool.mjs';
 
 export async function processReply(channel, item) {
@@ -443,6 +444,8 @@ export async function processReply(channel, item) {
           account: channel.transport.status().account,
           naturalDecision: item.naturalDecision,
           allowEmptyReply: () => !!selectedMedia || !!item.naturalDecision,
+          selectedReply: () => selectedMedia ? { text: selectedMedia.caption,
+            description: selectedMedia.asset.description || '', kind: selectedMedia.asset.kind } : null,
           selectReplyText: item.naturalDecision
             ? chooseNatural
             : (text) => {
@@ -453,6 +456,12 @@ export async function processReply(channel, item) {
           onRequestMetrics: requestMetrics => channel.store.update(record, { requestMetrics }),
           onSession: (id) => channel.store.update(record, { sessionId: id }),
         });
+        if (result.personaMode)
+          channel.store.update(record, { personaMode: result.personaMode, personaPasses: result.personaPasses });
+        if (selectedMedia && result.personaApplied) {
+          selectedMedia.caption = result.text;
+          replySelectionApplied = true;
+        }
         if (item.naturalDecision) {
           if (!decision) {
             decision = parseNaturalDecision(result.text);
@@ -514,7 +523,7 @@ export async function processReply(channel, item) {
         selectedMedia = undefined;
         imageReferences.length = 0;
         imageNoteChecks.length = 0;
-        result = { text: promptText("conversation/templates.json", "reply-text-5") + item.scheduled.content + promptText("conversation/templates.json", "reply-text-6") };
+        result = { text: promptText("conversation/templates.json", "reply-text-5") + item.scheduled.content + promptText("conversation/templates.json", "reply-text-6"), template: true };
         channel.store.update(record, {
           taskFallback: { code: error?.code || 'REPLY_FAILED', reason: publicError(error, '智能内容生成失败').message },
           replyMedia: undefined,
@@ -524,7 +533,11 @@ export async function processReply(channel, item) {
     clearTimeout(timeout);
     replySignal.throwIfAborted();
     channel.assertAllowed(item);
-    const message = result.text ? [{ type: 'text', data: { text: result.text } }] : [];
+    const recoveryPlan = item.scheduled?.recovery?.plan;
+    const texts = recoveryPlan ? recoveryPlan.filter(part => part.type === 'text').map(part => part.text)
+      : result.text ? (result.template ? [result.text] : splitChatReply(result.text)) : [];
+    const cleanReply = texts.join('\n');
+    const message = texts.map(part => ({ type: 'text', data: { text: part } }));
     channel.store.update(record, {
       replyDraft: result.text,
       ...(result.replyStyleWarning ? { replyStyleWarning: result.replyStyleWarning } : {}),
@@ -536,6 +549,14 @@ export async function processReply(channel, item) {
       replyMedia = { id: asset.id, name: asset.name, kind: asset.kind, description: asset.description };
       message.push(await channel.library.prepareSendSegment(record.accountId, asset.id, replySignal,
         { nativeReady: channel.transport.status().nativeStickersReady !== false }));
+    }
+    if (recoveryPlan) {
+      // A retry may start with media after an earlier text was acknowledged.
+      // Keep the original plan order instead of moving all text before images.
+      const preparedMedia = message.find(part => part.type !== 'text');
+      const ordered = recoveryPlan.map(part => part.type === 'text'
+        ? { type: 'text', data: { text: part.text } } : preparedMedia).filter(Boolean);
+      message.splice(0, message.length, ...ordered);
     }
     if (!message.length) throw new ChannelError('MODEL_EMPTY', '本轮没有可发送的文字或图片');
     replySignal.throwIfAborted();
@@ -555,37 +576,93 @@ export async function processReply(channel, item) {
     if (replyMedia) channel.library.resolveAsset(record.accountId, replyMedia.id);
     for (const reference of imageReferences) channel.imageMemory.assertReference(reference);
     for (const check of imageNoteChecks) check();
-    // Commit intent before crossing the side-effect boundary.
-    channel.store.update(record, {
-      state: 'sending',
-      sendAttempted: true,
-      reply: result.text,
-      ...(targets.length ? { replyMentions: targets } : {}),
-      ...(replyMedia ? { replyMedia } : {}),
+    // Validate the whole payload BEFORE any text crosses the send boundary.
+    // Splitting must not move a bad-media failure behind already-delivered text.
+    for (const part of message) {
+      if (!['image', 'face'].includes(part.type)) continue;
+      const status = channel.transport.status();
+      const native = part.data?.nativeSticker;
+      if (native && (!/^[0-9a-f]{32}$/iu.test(native.md5 || '') || status.nativeStickersReady === false))
+        throw new ChannelError('MEDIA_INVALID', '原生表情内容或发送权限无效，整轮尚未发送');
+      const encoded = part.data?.base64;
+      if (!encoded && native) continue;
+      const bytes = Buffer.from(encoded || '', 'base64');
+      if (!bytes.length || bytes.length > 10 * 1024 * 1024 || bytes.toString('base64') !== encoded)
+        throw new ChannelError('MEDIA_INVALID', '图片内容无效或超过限制，整轮尚未发送');
+      const { inspectAssetImage } = await import('../media/image-format.mjs');
+      const info = inspectAssetImage(bytes);
+      if (!['image/png', 'image/jpeg'].includes(info.mediaType) || info.mediaType !== part.data.mediaType || status.imageUploadReady === false)
+        throw new ChannelError('MEDIA_INVALID', '图片格式或发送权限无效，整轮尚未发送');
+    }
+    const sends = replySegments(message);
+    const replyPlan = sends.map((segment, index) => {
+      const part = segment.find(part => part.type !== 'at');
+      return { index, type: part.type, ...(part.type === 'text' ? { text: part.data.text } : { media: replyMedia }),
+        ...(segment.some(part => part.type === 'at') ? { mentions: targets } : {}),
+        ...(recoveryPlan?.[index] ? { sourceIndex: recoveryPlan[index].index } : {}) };
     });
-    const sent = await channel.transport.send(
-      { accountId: record.accountId, chatType: item.message.chatType, peerId: item.message.peerId, message },
-      replySignal
-    );
-    const ids = sent?.serverMessageIds;
-    if (
-      sent?.delivery !== 'server-ack' ||
-      !Array.isArray(ids) ||
-      !ids.length ||
-      ids.some((id) => typeof id !== 'string' || !id || id === '0')
-    )
-      throw new ChannelError('SEND_UNKNOWN', '没有收到可核对的微信服务端回执，结果不明，未自动重发', {
-        delivery: 'unknown',
-      });
+    const acknowledged = [], deliveredParts = [];
+    const remaining = start => replyPlan.slice(start).map(part => ({ index: 0, planIndex: part.index, type: part.type, state: 'not-sent' }));
+    const globalParts = parts => parts.map((part, index) => ({ ...part, index }));
+    channel.store.update(record, {
+      state: 'sending', sendAttempted: true, reply: cleanReply, replyPlan,
+      deliveryParts: globalParts(remaining(0)),
+      ...(recoveryPlan ? { recoveryPartIndexes: item.scheduled.recovery.partIndexes ?? recoveryPlan.map(part => part.index) } : {}),
+      ...(targets.length ? { replyMentions: targets } : {}), ...(replyMedia ? { replyMedia } : {}),
+    });
+    for (let sendIndex = 0; sendIndex < sends.length; sendIndex++) {
+      const segment = sends[sendIndex], planned = replyPlan[sendIndex];
+      let started = false;
+      const receipts = (parts, ids, state, observedAt, complete = false) => {
+        if (parts.length) return parts.map(part => ({ ...part, planIndex: sendIndex,
+          ...(part.state === 'acknowledged' ? { observedAt: part.observedAt ?? observedAt } : {}) }));
+        // One payload bubble + one reliable ACK is an unambiguous mapping.
+        // Multiple protocol chunks without receipts must not invent boundaries.
+        if (complete && ids.length === 1) return [{ planIndex: sendIndex, type: planned.type, state: 'acknowledged', serverMessageId: ids[0], observedAt,
+          ...(planned.type === 'text' ? { text: planned.text } : {}) }];
+        return [{ planIndex: sendIndex, type: planned.type, state: ids.length ? 'unknown' : state }];
+      };
+      try {
+        replySignal.throwIfAborted(); channel.assertAllowed(item);
+        if (replyMedia) channel.library.resolveAsset(record.accountId, replyMedia.id);
+        // Persist uncertainty before the network write; a crash is never not-sent.
+        channel.store.update(record, { acknowledgedMessageIds: [...acknowledged], deliveryParts: globalParts([
+          ...deliveredParts, { planIndex: sendIndex, type: planned.type, state: 'unknown' }, ...remaining(sendIndex + 1) ]) });
+        started = true;
+        const sent = await channel.transport.send(
+          { accountId: record.accountId, chatType: item.message.chatType, peerId: item.message.peerId, message: segment }, replySignal);
+        const ids = sent?.serverMessageIds;
+        if (sent?.delivery !== 'server-ack' || !Array.isArray(ids) || !ids.length || ids.some(id => typeof id !== 'string' || !id || id === '0'))
+          throw new ChannelError('SEND_UNKNOWN', '没有收到可核对的微信服务端回执，结果不明，未自动重发', {
+            delivery: 'unknown', ...(Array.isArray(sent?.deliveryParts) ? { deliveryParts: sent.deliveryParts } : {}) });
+        acknowledged.push(...ids);
+        deliveredParts.push(...receipts(sent.deliveryParts ?? [], ids, 'unknown', channel.now(), true));
+        channel.store.update(record, { acknowledgedMessageIds: [...acknowledged],
+          deliveryParts: globalParts([...deliveredParts, ...remaining(sendIndex + 1)]) });
+      } catch (error) {
+        if (error?.code === 'STATE_WRITE_FAILED') throw error;
+        const details = error.details ?? {};
+        const own = (Array.isArray(details.acknowledgedMessageIds) ? details.acknowledgedMessageIds : [])
+          .filter(id => typeof id === 'string' && id && id !== '0');
+        const ownParts = Array.isArray(details.deliveryParts) ? details.deliveryParts : [];
+        const ids = [...acknowledged, ...own];
+        error.details = { ...details, acknowledgedMessageIds: ids,
+          deliveryParts: globalParts([...deliveredParts, ...receipts(ownParts, own,
+            !started || ['rejected', 'not-sent'].includes(details.delivery) ? 'not-sent' : 'unknown', channel.now()), ...remaining(sendIndex + 1)]),
+          delivery: ids.length ? 'partially-acknowledged' : !started ? 'not-sent' : details.delivery ?? 'unknown' };
+        throw error;
+      }
+    }
+    const ids = acknowledged;
     // Even cancellation after a network write must preserve a real ACK.
-    const natural = channel.natural.after(item, 'sent', result.text, ids);
+    const natural = channel.natural.after(item, 'sent', cleanReply, ids);
     channel.store.update(
       record,
       {
         state: 'sent',
         sentAt: channel.now(),
         acknowledgedMessageIds: ids,
-        ...(sent.deliveryParts ? { deliveryParts: sent.deliveryParts } : {}),
+        ...(deliveredParts.length ? { deliveryParts: globalParts(deliveredParts) } : {}),
         reason: undefined,
       },
       { natural }

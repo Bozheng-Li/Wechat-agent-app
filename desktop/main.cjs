@@ -7,10 +7,11 @@ const { createUpdater } = require('./updates.cjs');
 // file (tests, npm start), so the release version comes from the package itself.
 const { version: PACKAGE_VERSION } = require('../package.json');
 
-async function runDesktop({ dataHome = process.env.WECHAT_APP_HOME, show = true } = {}) {
-  // Electron keys its instance lock by userData. Claim the same per-user lock
-  // before choosing a data directory, so another profile cannot start an app.
-  const singletonHome = path.join(app.getPath('appData'), 'dsh-Wechat-app');
+async function runDesktop({ dataHome = process.env.WECHAT_APP_HOME, show = true, instanceHome } = {}) {
+  // Normal launches share the per-user lock. Trusted in-process smoke tests
+  // supply their own lock home so testing never focuses/stops the user's app.
+  // No production CLI/environment option can override this lock identity.
+  const singletonHome = instanceHome ? path.resolve(instanceHome) : path.join(app.getPath('appData'), 'dsh-Wechat-app');
   app.setPath('userData', singletonHome);
   if (!app.requestSingleInstanceLock()) { app.quit(); return null; }
   // The bundle owns the storage helpers, so the packaged app never reaches into
@@ -110,6 +111,9 @@ async function runDesktop({ dataHome = process.env.WECHAT_APP_HOME, show = true 
   ipcMain.handle('wechat-app:open-path', async (event, target) => {
     owner(event);
     if (typeof target !== 'string' || target.length > 32767 || !path.isAbsolute(target)) throw new Error('目录无效');
+    // A network root is absolute too, and stat() on it would authenticate against
+    // a remote SMB host, so every UNC and device spelling is refused up front.
+    if (/^[\\/]{2}/.test(target) || path.win32.parse(target).root.startsWith('\\\\')) throw new Error('目录无效');
     let stat;
     try { stat = await fs.promises.stat(target); } catch { throw new Error('目录不存在'); }
     if (!stat.isDirectory()) throw new Error('只能打开目录');

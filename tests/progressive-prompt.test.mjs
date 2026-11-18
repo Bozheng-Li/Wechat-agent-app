@@ -18,26 +18,30 @@ test('progressive is opt-in and a misspelled strategy cannot silently change the
   assert.notEqual(progressive(options), legacy);
 });
 
-test('default public prompts have a bounded fixed cost without removing identity, facts or delivery rules', () => {
+test('default public prompts keep the full authored persona inside the editor limit', () => {
   for (const requestText of ['你好', '今天收拾好了桌子。']) {
     const options = { ...common(), requestText, capabilities };
     const text = progressive(options);
-    assert(text.length >= 1500 && text.length <= 2500, `${requestText}: ${text.length} characters`);
-    assert(text.length < buildWechatPrompt(options).length / 2);
+    // The shipped persona must reach the model intact; the whole public prompt is
+    // kept small so the persona is not diluted by rule volume.
+    assert(text.length >= 1500 && text.length <= 5200, `${requestText}: ${text.length} characters`);
     for (const requirement of ['当前授权会话', '微信回执', '提交不等于成功', '最新明确更正优先',
-      '被直接问是否 AI 时如实简短回答', '只输出最终正文', '数量、单位和事情进度']) assert(text.includes(requirement), requirement);
+      '被直接问是否 AI', '只输出最终正文', '数量、单位和事情进度']) assert(text.includes(requirement), requirement);
     assert(text.includes('配置名字："微信助手"'));
+    assert(text.includes(personaFromPreset().background));
     assert(!text.includes(DEFAULT_AGENT_IDENTITY));
   }
 });
 
-test('only shipped persona examples can be reduced; the relevant greeting has at most one example', () => {
+test('a bare greeting keeps the persona but trims the example library to the greeting itself', () => {
   const greeting = progressive({ requestText: '你好' });
   const ordinary = progressive({ requestText: '今天收拾好了桌子。' });
-  assert.equal((greeting.match(/本轮语气示例/g) || []).length, 1);
+  assert(greeting.length < ordinary.length);
+  assert(greeting.includes('语气示例：对方「早。」，回应「早。」'));
+  assert(!greeting.includes('第四版。第五版还来不来'));
+  assert(greeting.includes(personaFromPreset().background));
   assert(!greeting.includes('当前时间：'));
-  assert(!greeting.includes('这下桌子干净了，笔也藏好了'));
-  assert(!ordinary.includes('本轮语气示例'));
+  assert(ordinary.includes('第四版。第五版还来不来'));
   assert(ordinary.includes('时区 Asia/Shanghai'));
 });
 

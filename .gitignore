@@ -29,3 +29,14 @@ __pycache__/
 
 /ui/
 /artifacts/
+
+# Local-only persona experiments may reference private archives/provider routes.
+/scripts/persona-comparison-live.cjs
+/scripts/persona-comparison-live.mjs
+/scripts/persona-samples-live.cjs
+/scripts/persona-samples-live.mjs
+/scripts/style-summary-live.cjs
+/scripts/style-summary-live.mjs
+/scripts/understanding-replay-live.cjs
+/scripts/understanding-replay-live.mjs
+/scripts/distill-chat-style.mjs

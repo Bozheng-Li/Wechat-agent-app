@@ -87,13 +87,20 @@ export function validatePersona(input) {
   )
     throw new ChannelError('INVALID_PERSONA', '昵称别名最多 12 个，每个 1–80 字，不能包含换行');
   const aliases = [...new Set(input.aliases.map((alias) => alias.trim()))];
-  if (Object.hasOwn(input, 'prompt')) return { name, aliases, prompt: field('prompt', 16000) };
+  const extras = {};
+  if (Object.hasOwn(input, 'personaMode')) {
+    if (!['standard', 'high-precision'].includes(input.personaMode))
+      throw new ChannelError('INVALID_PERSONA', '人设调用模式只能是标准模式或高精度模式');
+    extras.personaMode = input.personaMode;
+  }
+  if (Object.hasOwn(input, 'prompt')) return { name, aliases, ...extras, prompt: field('prompt', 16000) };
   return {
     name,
     aliases,
-    background: field('background', 2000),
-    personality: field('personality', 6000),
-    style: field('style', 2000),
+    ...extras,
+    background: field('background', 4000),
+    personality: field('personality', 8000),
+    style: field('style', 12000),
   };
 }
 
@@ -101,6 +108,56 @@ export function validateGlobalPersona(input) {
   const persona = validatePersona(input);
   return personaText(persona).trim() ? persona : emptyPersona(persona);
 }
+
+/** Named personas: the owner can keep several and switch the active one. */
+export const PERSONA_LIMIT = 12;
+export const PERSONA_SOURCES = ['manual', 'distilled'];
+
+export function validatePersonaProvenance(input) {
+  const validId = value => typeof value === 'string' && value.length > 0 && value.length <= 150 && !/[\s\u0000-\u001f]/u.test(value);
+  const fail = () => { throw new ChannelError('INVALID_PERSONA_PROVENANCE', '提炼来源记录无效，请重新生成。'); };
+  if (!input || input.version !== 1 || !validId(input.accountId) || !validId(input.personId) || input.personId.endsWith('@chatroom') ||
+    !Number.isSafeInteger(input.epoch) || input.epoch < 0 || !Number.isSafeInteger(input.generatedAt) || input.generatedAt < 0 ||
+    !Array.isArray(input.sourceScopes) || !input.sourceScopes.length || input.sourceScopes.length > 60) fail();
+  const sourceScopes = input.sourceScopes.map(scope => {
+    if (!scope || scope.accountId !== input.accountId || !['private', 'group'].includes(scope.chatType) || !validId(scope.peerId)) fail();
+    return { accountId: scope.accountId, chatType: scope.chatType, peerId: scope.peerId };
+  });
+  if (new Set(sourceScopes.map(scope => JSON.stringify(scope))).size !== sourceScopes.length) fail();
+  const phrases = input.phrases ?? [];
+  if (!Array.isArray(phrases) || phrases.length > 80 || phrases.some(value => typeof value !== 'string' ||
+    Array.from(value).length < 2 || Array.from(value).length > 10 || /[\u0000-\u001f]/u.test(value))) fail();
+  return { version: 1, accountId: input.accountId, personId: input.personId, epoch: input.epoch,
+    generatedAt: input.generatedAt, sourceScopes, phrases: [...new Set(phrases)] };
+}
+
+export function validatePersonaEntry(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input))
+    throw new ChannelError('INVALID_PERSONA', '人设条目格式不正确');
+  if (typeof input.id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,31}$/.test(input.id))
+    throw new ChannelError('INVALID_PERSONA', '人设编号无效');
+  if (typeof input.name !== 'string' || !input.name.trim() || input.name.length > 80)
+    throw new ChannelError('INVALID_PERSONA', '请填写人设名称，最多 80 字');
+  const source = PERSONA_SOURCES.includes(input.source) ? input.source : 'manual';
+  const createdAt = Number.isSafeInteger(input.createdAt) && input.createdAt >= 0 ? input.createdAt : 0;
+  const provenance = source === 'distilled' && input.provenance ? validatePersonaProvenance(input.provenance) : undefined;
+  return { id: input.id, name: input.name.trim(), source, createdAt,
+    ...(Number.isSafeInteger(input.updatedAt) && input.updatedAt >= 0 ? { updatedAt: input.updatedAt } : {}),
+    ...(provenance ? { provenance } : {}),
+    ...(source === 'distilled' && (input.disabled === true || !provenance) ? { disabled: true } : {}),
+    persona: validateGlobalPersona(input.persona) };
+}
+
+export function validatePersonaList(input) {
+  if (!Array.isArray(input) || input.length > PERSONA_LIMIT)
+    throw new ChannelError('INVALID_PERSONA', `最多保留 ${PERSONA_LIMIT} 个人设`);
+  const list = input.map(validatePersonaEntry);
+  if (!list.length) throw new ChannelError('INVALID_PERSONA', '至少需要一个人设');
+  if (new Set(list.map(entry => entry.id)).size !== list.length)
+    throw new ChannelError('INVALID_PERSONA', '人设编号重复');
+  return list;
+}
+
 
 export function validateModelConfig(input) {
   if (

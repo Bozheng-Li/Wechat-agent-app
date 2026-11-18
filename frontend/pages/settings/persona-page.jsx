@@ -1,20 +1,170 @@
+import { useEffect, useState } from 'react';
 import { splitLines } from '../../shared/conversations.mjs';
 import { Button } from '../../components/button.jsx';
 import { PageHead, Notice, Back } from '../../components/page-ui.jsx';
 import { Field, FormActions } from '../../components/form-ui.jsx';
+import { WorkspaceTabs, WorkspacePanels } from '../../components/workspace-tabs.jsx';
+import { PersonaChat } from './persona-chat.jsx';
 
-export function PersonaSettings({ draft, blocked, busy, dirty, notice, onChange, onSave, onReset,
-  onBack, backLabel, onRestoreDefault }) {
+const WARMTH_LABELS = [
+  ['balanced', '中性（推荐）'],
+  ['terse', '更短更冷'],
+  ['warm', '稍暖一点'],
+];
+
+/** 从聊天记录提炼说话方式，并另存为一个人设。 */
+function DistillPanel({ rpc, accountId, blocked, onSaved, onCancel }) {
+  const [people, setPeople] = useState(null);
+  const [senderId, setSenderId] = useState('');
+  const [warmth, setWarmth] = useState('balanced');
+  const [draft, setDraft] = useState(null);
+  const [title, setTitle] = useState('');
+  const [busy, setBusy] = useState('');
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!rpc || !accountId) return;
+    let live = true;
+    rpc('persona.candidates', { accountId })
+      .then(value => { if (live) setPeople(value); })
+      .catch(failure => { if (live) { setError(failure.message || '读取会话失败'); setPeople([]); } });
+    return () => { live = false; };
+  }, [rpc, accountId]);
+
+  const build = async () => {
+    if (!senderId || blocked || busy) return;
+    setBusy('build'); setError(''); setDraft(null);
+    try {
+      const value = await rpc('persona.distill', { accountId, senderId, warmth });
+      setDraft(value);
+      setTitle(value.suggestedName);
+    } catch (failure) { setError(failure.message || '提炼失败'); }
+    finally { setBusy(''); }
+  };
+
+  const save = async () => {
+    if (blocked || busy || !draft?.draftToken) return;
+    setBusy('save'); setError('');
+    try {
+      const result = await onSaved({ persona: draft.persona, name: title.trim(), draftToken: draft.draftToken,
+        accountId: draft.accountId, senderId: draft.senderId });
+      if (!result) setError('保存未完成，草稿和编辑内容已保留；请查看错误提示后重试。');
+    } catch (failure) { setError(failure.message || '保存失败，草稿和编辑内容已保留。'); }
+    finally { setBusy(''); }
+  };
+
+  return <section className="wa-persona-distill" data-testid="persona-distill">
+    <div className="wa-card-heading">
+      <div><h2>从聊天记录提炼</h2>
+        <p className="wa-muted">从最近的授权发言学习表达。含敏感私事的整条会排除，姓名称呼会匿名；自动脱敏不能保证完美，请在保存前检查。保存后所有会话共用。</p></div>
+      <Button quiet onClick={onCancel} disabled={blocked || !!busy}>取消</Button>
+    </div>
+    {!people ? <p className="wa-help">正在读取会话…</p>
+      : !people.length ? <p className="wa-help">还没有可用的会话记录。先和某人聊一段时间，再回来提炼。</p>
+        : <>
+          <div className="wa-form-grid">
+            <Field label="学谁" id="wa-distill-person">
+              <select className="wa-input" id="wa-distill-person" value={senderId} disabled={blocked || !!busy}
+                onChange={event => { setSenderId(event.target.value); setDraft(null); }}>
+                <option value="">选择一个人</option>
+                {people.map(person => <option key={person.senderId} value={person.senderId}>
+                  {person.name}（{person.count} 条，{person.chats.length} 个会话）
+                </option>)}
+              </select>
+            </Field>
+            <Field label="松紧" id="wa-distill-warmth" help="只影响长度下限和认真话题的处理。">
+              <select className="wa-input" id="wa-distill-warmth" value={warmth} disabled={blocked || !!busy}
+                onChange={event => { setWarmth(event.target.value); setDraft(null); }}>
+                {WARMTH_LABELS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+              </select>
+            </Field>
+          </div>
+          <p className="wa-help">将把脱敏后的最新短句、场合类型和时间发给当前模型，只调用一次总结说话方式；验证不通过时明确改用统计模板。</p>
+          <div className="wa-row">
+            <Button quiet onClick={build} loading={busy === 'build'} disabled={blocked || !senderId || !!busy}>生成草稿</Button>
+          </div>
+          {draft && <>
+            {draft.summarized === false && <p className="wa-alert is-error" role="status">{draft.summaryError}</p>}
+            <p className="wa-help">统计：{draft.summary}</p>
+            {draft.sampling && <p className="wa-help">本次发给模型 {draft.sampling.used} 条最新脱敏短句；排除 {draft.sampling.excluded} 条，截断省略 {draft.sampling.omitted} 条、{draft.sampling.omittedPeers || 0} 个会话；时间未知 {draft.sampling.unknownTime} 条。未提供关系或情绪场合，不能据此补全。</p>}
+            <Field label="人设名称" id="wa-distill-title">
+              <input className="wa-input" id="wa-distill-title" maxLength={80} value={title} disabled={blocked || !!busy}
+                onChange={event => setTitle(event.target.value)} />
+            </Field>
+            <Field label="生成的人设（保存前可以改）" id="wa-distill-body">
+              <textarea className="wa-textarea wa-persona-editor" id="wa-distill-body" rows={14} disabled={blocked || !!busy}
+                value={draft.persona.prompt}
+                onChange={event => setDraft({ ...draft, persona: { ...draft.persona, prompt: event.target.value } })} />
+            </Field>
+            <div className="wa-row">
+              <Button primary onClick={save} loading={busy === 'save'}
+                disabled={blocked || !title.trim() || !draft.draftToken || Date.now() >= draft.draftExpiresAt || !!busy}>保存为新人设并使用</Button>
+            </div>
+          </>}
+        </>}
+    {error && <p className="wa-alert is-error" role="alert">{error}</p>}
+  </section>;
+}
+
+function PersonaLibrary({ personas, blocked, onSelect, onDelete, onAdd, onManualCopy }) {
+  const items = personas?.items ?? [];
+  return <section className="wa-persona-library" data-testid="persona-library">
+    <div className="wa-card-heading">
+      <div><h2>人设库</h2>
+        <p className="wa-muted">所有会话共用正在使用的那一条。{items.length} / 12</p></div>
+      <Button quiet icon="plus" onClick={onAdd} disabled={blocked}>从聊天记录提炼</Button>
+    </div>
+    <ul className="wa-persona-list" role="radiogroup" aria-label="选择人设">
+      {items.map(item => {
+        const active = item.id === personas.activeId;
+        return <li key={item.id} data-active={active || undefined}>
+          <button type="button" className="wa-persona-pick" role="radio" aria-checked={active}
+            disabled={blocked || item.disabled} onClick={() => onSelect(item.id)}>
+            <span className="wa-persona-mark" aria-hidden="true" />
+            <span className="wa-persona-copy">
+              <span className="wa-persona-name">{item.name}</span>
+              <span className="wa-persona-meta">{item.source === 'distilled' ? '提炼' : '手写'} · {item.chars} 字{item.disabledReason ? ' · ' + item.disabledReason : ''}</span>
+            </span>
+            {active && <span className="wa-persona-badge">使用中</span>}
+          </button>
+          {item.legacyPersona && <details>
+            <summary>查看已停用原文（不用于回复）</summary>
+            <p className="wa-help">旧提炼缺少可验证来源，原文未删除或改写。可重新提炼；只有你明确选择另存为手写，副本才会重新全局使用。</p>
+            <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{item.legacyPersona.prompt ??
+              [item.legacyPersona.background, item.legacyPersona.personality, item.legacyPersona.style].filter(Boolean).join('\n\n')}</pre>
+            <Button quiet disabled={blocked || items.length >= 12} onClick={() => onManualCopy(item)}>明确另存为手写副本并使用</Button>
+          </details>}
+          <button type="button" className="wa-persona-remove" aria-label={'删除人设 ' + item.name}
+            disabled={blocked || items.length <= 1} title={items.length <= 1 ? '至少要保留一个人设' : '删除'}
+            onClick={() => onDelete(item.id)}>删除</button>
+        </li>;
+      })}
+    </ul>
+  </section>;
+}
+
+const TABS = [['edit', '当前人设'], ['library', '人设库'], ['chat', '试聊']];
+
+export function PersonaSettings({ draft, personas, blocked, busy, dirty, notice, onChange, onSave, onReset,
+  onBack, backLabel, onRestoreDefault, rpc, accountId, onSelectPersona, onCreatePersona, onDeletePersona }) {
+  const [tab, setTab] = useState('edit');
+  const [adding, setAdding] = useState(false);
   const aliases = splitLines(draft.aliases);
-  const invalid = !draft.name.trim() || aliases.length > 12 || aliases.some(alias => alias.length > 80) || draft.prompt.length > 16000;
+  const activeName = (personas?.items ?? []).find(item => item.id === personas.activeId)?.name;
+  const invalid = !draft.name.trim() || aliases.length > 12 || aliases.some(alias => alias.length > 80) || draft.prompt.length > 16000 ||
+    !['standard', 'high-precision'].includes(draft.personaMode || 'standard');
+
   return <>
     <Back label={backLabel} onClick={onBack} />
-    <PageHead icon="person" title="默认助手" description="所有授权会话共用的名字、唤醒词与表达偏好。" />
+    <PageHead icon="person" title="默认助手" description="管理多个人设，选用其中一个，或从聊天记录提炼新的说话方式。" />
     <Notice notice={notice} area="persona" />
-    <div className="wa-persona-studio wa-editor-layout" data-testid="global-persona-editor">
-      <form className="wa-settings-document wa-persona-manuscript" onSubmit={event => { event.preventDefault(); onSave(); }}>
+    {personas?.suspendedId && <p className="wa-alert is-error" role="status">原选人设因来源缺失或撤销已停止全局使用，当前仅使用安全可用的人设。原条目仍在库中；旧无来源正文可展开查看并由你明确选择如何恢复。</p>}
+    <WorkspaceTabs name="persona" label="人设分区" active={tab} onChange={setTab} tabs={TABS} />
+    <WorkspacePanels name="persona" tabs={TABS.map(([id]) => id)} active={tab}>
+      {tab === 'edit' && <form className="wa-settings-document wa-persona-manuscript wa-persona-pane"
+        onSubmit={event => { event.preventDefault(); onSave(); }}>
         <details className="wa-editor-identity" data-testid="persona-identity-settings">
-          <summary><span className="wa-editor-avatar" aria-hidden="true">{(draft.name.trim() || '助').slice(0, 1)}</span><span><strong>{draft.name || '未设置名字'}</strong><small>全局共用 · {aliases.length ? aliases.length + ' 个唤醒别名' : '尚未设置唤醒别名'}</small></span><span className="wa-editor-identity-action">名字与唤醒词</span></summary>
+          <summary><span className="wa-editor-avatar" aria-hidden="true">{(draft.name.trim() || '助').slice(0, 1)}</span><span><strong>{draft.name || '未设置名字'}</strong><small>{activeName ? '正在编辑：' + activeName : '正在编辑当前人设'} · {aliases.length ? aliases.length + ' 个唤醒别名' : '尚未设置唤醒别名'}</small></span><span className="wa-editor-identity-action">名字与唤醒词</span></summary>
           <div className="wa-form-grid">
             <Field label="助手名字" id="wa-persona-name">
               <input className="wa-input" id="wa-persona-name" maxLength={80} value={draft.name} disabled={blocked}
@@ -26,17 +176,41 @@ export function PersonaSettings({ draft, blocked, busy, dirty, notice, onChange,
             </Field>
           </div>
         </details>
-        <div className="wa-editor-toolbar"><h2>表达偏好</h2><Button quiet data-testid="restore-default-persona" disabled={blocked} onClick={onRestoreDefault}>恢复默认正文</Button></div>
-        <Field label="全局自定义提示词" id="wa-persona-prompt" count={draft.prompt.length + ' / 16000'}
-          help="补充表达偏好、关注重点和称呼，保存后用于后续回复。恢复默认正文会保留名字与唤醒词。">
+        <label className="wa-check-row wa-persona-precision">
+          <input type="checkbox" aria-label="高精度人设模式" checked={draft.personaMode === 'high-precision'} disabled={blocked}
+            onChange={event => onChange({ ...draft, personaMode: event.target.checked ? 'high-precision' : 'standard' })} />
+          <span>高精度人设模式</span>
+        </label>
+        <p className="wa-help">回复先整理事实，再单独按人设表达；每条需回复的消息多一次生成。不会因短消息自动降级。</p>
+        <div className="wa-editor-toolbar"><h2>人设正文</h2><Button quiet data-testid="restore-default-persona" disabled={blocked} onClick={onRestoreDefault}>恢复默认正文</Button></div>
+        <Field label="性格与表达" id="wa-persona-prompt" count={draft.prompt.length + ' / 16000'}
+          help="写清相处方式、关注点、称呼和说话习惯。「试聊」页可以直接用当前草稿测试，不必先保存。">
           <textarea className="wa-textarea wa-persona-editor" id="wa-persona-prompt" rows={18} maxLength={16000}
             value={draft.prompt} disabled={blocked} onChange={event => onChange({ ...draft, prompt: event.target.value })}
-            placeholder="例如：日常说话简短一点；遇到技术问题保留必要细节。不必每次叫我的名字。" />
+            placeholder="例如：说话短一点，对具体细节有兴趣，偶尔轻轻吐槽。" />
         </Field>
-        {invalid && <div className="wa-alert is-error" role="alert">请填写助手名字；唤醒别名最多 12 个，每个不超过 80 字，正文不超过 16000 字。</div>}
+        {invalid && <div className="wa-alert is-error" role="alert">请填写名字；唤醒别名最多 12 个，每个不超过 80 字；人设正文不超过 16000 字。</div>}
         <FormActions dirty={dirty} busy={busy === 'persona.save'} disabled={blocked} invalid={invalid} onReset={onReset}
-          label="保存全局助手设定" hint="所有会话的后续回复共用；已有记忆继续保留。" />
-      </form>
-    </div>
+          label="保存当前人设" hint="只影响当前选用的人设；其他人的设定不变。" />
+      </form>}
+      {tab === 'library' && <div className="wa-persona-pane">
+        {adding
+          ? <DistillPanel rpc={rpc} accountId={accountId} blocked={blocked}
+              onCancel={() => setAdding(false)}
+              onSaved={async payload => {
+                const result = await onCreatePersona(payload);
+                if (result) setAdding(false);
+                return result;
+              }} />
+          : <PersonaLibrary personas={personas} blocked={blocked}
+              onSelect={id => onSelectPersona(id)} onDelete={id => onDeletePersona(id)}
+              onManualCopy={item => onCreatePersona({ persona: item.legacyPersona,
+                name: (item.name + '·手写副本').slice(0, 80), source: 'manual' })}
+              onAdd={() => setAdding(true)} />}
+      </div>}
+      {tab === 'chat' && <div className="wa-persona-pane wa-persona-chat-pane">
+        <PersonaChat draft={draft} rpc={rpc} disabled={blocked || invalid} />
+      </div>}
+    </WorkspacePanels>
   </>;
 }

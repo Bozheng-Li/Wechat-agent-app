@@ -390,16 +390,20 @@ test('erased trace contexts cannot recreate deleted payloads when a late step fi
   assert.equal(fs.existsSync(path.join(trace.day.directory, trace.row.id)), false);
 });
 
-test('a transport that ignores abort cannot block revocation or return a late result after reauthorisation', async t => {
+test('revocation aborts in-flight sends but retains their actual acknowledgement before cleanup', async t => {
   const entered = Promise.withResolvers(), release = Promise.withResolvers();
   const f = fixture(t, { send: (_input, signal) => { entered.resolve(signal); return release.promise; } });
   f.releases.push(() => release.resolve({ delivery: 'server-ack', serverMessageIds: ['late'] }));
   const pending = f.transport.send({ ...f.scope(), message: [{ type: 'text', data: { text: '测试' } }] });
-  const rejected = assert.rejects(pending, { code: 'AUTHORIZATION_CHANGED' }); await entered.promise;
-  await f.revoke('alice'); await rejected;
-  assert.equal((await entered.promise).aborted, true);
-  f.store.configure(f.accountId, { ...f.store.settings(f.accountId), privatePeers: [...f.store.settings(f.accountId).privatePeers, 'alice'] });
-  release.resolve({ delivery: 'server-ack', serverMessageIds: ['late'] }); await new Promise(resolve => setImmediate(resolve));
+  const signal = await entered.promise;
+  const revoking = f.revoke('alice');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(signal.aborted, true);
+  release.resolve({ delivery: 'server-ack', serverMessageIds: ['late'] });
+  assert.deepEqual((await pending).serverMessageIds, ['late']);
+  await revoking;
+  await assert.rejects(() => f.transport.send({ ...f.scope(), message: [{ type: 'text', data: { text: '不能再发' } }] }),
+    { code: 'OBJECT_NOT_AUTHORIZED' });
   assert.equal(f.store.data.authorizationRevocations.length, 0); assert.equal(f.sent.length, 1);
 });
 

@@ -5,7 +5,8 @@ const http = require('node:http');
 const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
 const { app, safeStorage } = require('electron');
-const { runDesktop } = require('../desktop/main.cjs');
+const packageRoot = process.env.WECHAT_APP_TEST_PACKAGE_ROOT ? path.resolve(process.env.WECHAT_APP_TEST_PACKAGE_ROOT) : path.resolve(__dirname, '..');
+const { runDesktop } = require(path.join(packageRoot, 'desktop/main.cjs'));
 app.disableHardwareAcceleration();
 // Keep the harness alive while the real window is closed and storage is reopened.
 app.on('window-all-closed', () => {});
@@ -13,6 +14,8 @@ const root = path.resolve(__dirname, '..');
 const artifacts = path.join(root, 'artifacts');
 fs.mkdirSync(artifacts, { recursive: true });
 const dataHome = fs.mkdtempSync(path.join(artifacts, 'desktop-data-'));
+const instanceHome = path.join(dataHome, 'test-instance-home');
+process.env.WECHAT_APP_TEST_INSTANCE_HOME = instanceHome;
 const runId = process.env.WECHAT_APP_TEST_RUN_ID;
 const progress = [];
 const stage = name => {
@@ -52,13 +55,14 @@ async function main() {
     request.on('end', () => {
       const value = JSON.parse(body); assert.equal(value.model, 'fixture-model'); modelRequests++;
       response.writeHead(200, { 'content-type': 'application/json' });
-      response.end(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'OK' } }] }));
+      const content = JSON.stringify(value.messages).includes('desktop-split-check') ? '甲<SPLIT>乙' : 'OK';
+      response.end(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content } }] }));
     });
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   process.env.WECHAT_APP_UPDATE_FEED = 'http://127.0.0.1:' + server.address().port + '/download/latest.yml';
   stage('starting desktop');
-  desktop = await bounded(runDesktop({ dataHome, show: true }), 'Desktop startup', 60000); assert.ok(desktop);
+  desktop = await bounded(runDesktop({ dataHome, show: true, instanceHome }), 'Desktop startup', 60000); assert.ok(desktop);
   stage('desktop loaded');
   const { window, application } = desktop;
   let repeatedStarts = 0;
@@ -242,7 +246,7 @@ async function main() {
     }
     if (page === 'identity') await poll(() => js('!!document.querySelector("textarea:not(:disabled)")'));
     if (page === 'time') await poll(() => js('!!document.querySelector("[data-testid^=time-group-]")'));
-    if (page === 'changelog') await poll(() => js('document.body.innerText.includes(' + JSON.stringify(require('../package.json').version) + ')'));
+    if (page === 'changelog') await poll(() => js('document.body.innerText.includes(' + JSON.stringify(require(path.join(packageRoot, 'package.json')).version) + ')'));
   }
   stage('all navigation and settings pages verified');
   await openPage('settings'); await openPage('persona', '[data-testid=open-persona]');
@@ -251,9 +255,31 @@ async function main() {
   stage('editing persona name');
   await setInput('#wa-persona-name', '桌面验收助手');
   stage('submitting persona settings');
-  await js('document.querySelector("[data-testid=global-persona-editor] form").requestSubmit()');
+  await js('document.querySelector("#wa-persona-panel-edit form").requestSubmit()');
   await poll(async () => (await application.call('status')).value.persona.name === '桌面验收助手');
   stage('persona settings saved');
+  const created = await application.call('persona.create', { name: '桌面命名人设', source: 'manual',
+    persona: { name: '桌面验收助手', aliases: [], prompt: '自然表达，不用固定短句。', personaMode: 'standard' } });
+  assert.equal(created.ok, true);
+  await js('document.querySelector("[data-testid=persona-tab-library]").click()');
+  await poll(() => js('document.body.innerText.includes("桌面命名人设")'));
+  assert.equal(await js('!!document.querySelector("#wa-persona-prompt")'), false, 'library is separate from editor');
+  await js('document.querySelector("[data-testid=persona-tab-edit]").click()');
+  await poll(() => js('!!document.querySelector("#wa-persona-prompt:not(:disabled)")'));
+  await setInput('#wa-persona-prompt', '改过的表达正文，不改变库标题。');
+  await js('document.querySelector("#wa-persona-panel-edit form").requestSubmit()');
+  await poll(async () => (await application.call('status')).value.persona.prompt === '改过的表达正文，不改变库标题。');
+  const library = (await application.call('status')).value.personas;
+  assert.equal(library.items.find(item => item.id === library.activeId).name, '桌面命名人设');
+  await js('document.querySelector("[data-testid=persona-tab-chat]").click()');
+  await poll(() => js('!!document.querySelector("[aria-label=试聊输入]:not(:disabled)")'));
+  await setInput('[aria-label=试聊输入]', 'desktop-split-check');
+  await js('document.querySelector(".wa-persona-chat-compose").requestSubmit()');
+  await poll(() => js('document.querySelectorAll(".wa-persona-chat-message[data-role=assistant]").length === 2'));
+  assert.deepEqual(await js('[...document.querySelectorAll(".wa-persona-chat-message[data-role=assistant] p")].map(node => node.textContent)'), ['甲', '乙']);
+  assert.equal(await js('new Set([...document.querySelectorAll(".wa-persona-chat-message[data-role=assistant]")].map(node => node.dataset.turn)).size'), 1);
+  assert.equal(await js('document.querySelector("[data-testid=persona-chat]").innerText.includes("<SPLIT>")'), false);
+  stage('persona library, independent tabs and split preview verified');
   await openPage('settings'); await openPage('model', '[data-testid=open-model]');
   await poll(() => js('!!document.querySelector("#wa-max-tokens:not(:disabled)")'));
   stage('editing model generation settings');
@@ -293,7 +319,7 @@ async function main() {
   const persisted = JSON.parse(fs.readFileSync(path.join(dataHome, 'providers.json'), 'utf8'));
   assert.equal(persisted.providers[0].models[0].id, 'fixture-model');
   assert.equal(JSON.stringify(persisted).includes('desktop-fixture-key'), false);
-  const { createDesktopApplication } = await import('../lib/app.js');
+  const { createDesktopApplication } = await import(require('node:url').pathToFileURL(path.join(packageRoot, 'lib/app.js')).href);
   const restarted = await createDesktopApplication({ dataHome, encryption: {
     isAvailable: () => safeStorage.isEncryptionAvailable(), encrypt: value => safeStorage.encryptString(value), decrypt: value => safeStorage.decryptString(value),
   } });
@@ -304,11 +330,12 @@ async function main() {
     assert.equal(restored.value.modelConfig.maxTokens, 2048);
     assert.equal(restored.value.defaultModel.model, 'fixture-model');
     assert.equal((await restarted.call('providers.test', { provider: 'fixture', model: 'fixture-model' })).ok, true);
-    assert.equal(modelRequests, 3);
+    assert.equal(modelRequests, 4);
   } finally { await bounded(restarted.close(), 'Restart cleanup'); }
   stage('settings and encrypted credentials survived restart');
   assert.equal(failures.length, 0, failures.join('\n'));
-  fs.writeFileSync(path.join(artifacts, 'desktop-smoke.json'), JSON.stringify({ ok: true, runId, finishedAt: new Date().toISOString(), pages: [...pages], modelRequests,
+  fs.writeFileSync(path.join(artifacts, 'desktop-smoke.json'), JSON.stringify({ ok: true, runId, packageVersion: require(path.join(packageRoot, 'package.json')).version,
+    appDirectory: packageRoot, finishedAt: new Date().toISOString(), pages: [...pages], modelRequests,
     runtimeReady: true, encryptedCredentials: true, settingsRestored: true, narrowLayout: true, offlineBackground: true, singleInstance: true, repeatedStarts, rendererIsolated: true, realWechatConnected: false, failures }, null, 2));
   console.log('Desktop smoke passed: all pages, provider editing, model API, narrow layout, tray close, graceful shutdown and restart.');
 }

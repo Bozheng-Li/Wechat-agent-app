@@ -7,9 +7,19 @@
   "electronDist": "node_modules/electron/dist",
   "files": [
     "package.json", "desktop/main.cjs", "desktop/network.cjs", "desktop/preload.cjs", "desktop/updates.cjs", "desktop/blockmap.cjs", "desktop/icon.ico",
-    "lib/app.js", "lib/worker.cjs", "ui/**", "prompts/**", "config.yaml",
+    "lib/app.js", "lib/worker.cjs", "ui/**", "config.yaml",
+    "prompts/conversation/templates.json", "prompts/diagnostics/templates.json", "prompts/digests/templates.json", "prompts/files/tools.json",
+    "prompts/identity/default.md", "prompts/memory/extraction.json", "prompts/memory/query.json",
+    "prompts/moments/content-review.md", "prompts/moments/friend-reply.md", "prompts/moments/image-read.md", "prompts/moments/interactions.md",
+    "prompts/moments/material-review.md", "prompts/moments/materials.md", "prompts/moments/publish.md", "prompts/moments/reply.md",
+    "prompts/personas/conversation-skill.md", "prompts/recovery/templates.json", "prompts/remote/messages.json",
+    "prompts/reply/chat-task.md", "prompts/reply/configured-task.md", "prompts/reply/continuing-chat.md", "prompts/reply/current-turn.md",
+    "prompts/reply/default-task.md", "prompts/reply/defaults.md", "prompts/reply/language.md",
+    "prompts/tasks/templates.json", "prompts/vision/requests.json", "prompts/vision/tools.json",
     "runtime/**", "LICENSE", "THIRD_PARTY_NOTICES.md", "CHANGELOG.md", "README.md", "docs/**", "licenses/**",
-    "!**/__pycache__/**", "!**/*.pyc", "!**/ready.json", "!**/site-packages/bin/**"
+    "!**/__pycache__/**", "!**/*.pyc", "!**/ready.json", "!**/site-packages/bin/**", "!**/*.map",
+    "!**/artifacts/**", "!**/storage/**", "!**/credentials/**", "!**/providers/**", "!**/providers.json",
+    "!**/scripts/**", "!data/**", "!**/Local State", "!**/.env", "!**/.env.*"
   ],
   "win": {
     "target": "nsis", "icon": "desktop/icon.ico", "signExecutable": false,

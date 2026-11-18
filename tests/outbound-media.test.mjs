@@ -6,6 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { rolldown } from 'rolldown';
 import { nativeQrSession, writeNativeQrRound } from './fixtures/native-qr-session.mjs';
+import { replySegments, splitChatReply } from '../shared/chat-reply-split.mjs';
 
 // Keep protocol fixtures isolated from the running worker and its credentials.
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -512,4 +513,30 @@ test('native CGI accepts validated request-echo and content checksums, rejects a
   let calls = 0;
   await assert.rejects(() => api.requestStickerCgi(account, 697, body, new AbortController().signal, async () => { calls++; return new Response(encodeCgiBody(697, response, 124, account.token)); }), { code: 'ERR_STICKER_PROTOCOL' });
   assert.equal(calls, 1);
+});
+
+test('explicit SPLIT + media is three native bubbles with exact receipt body and server time', async t => {
+  const f = fixture(t, (cmd, body, index) => cmd === 110 ? imageAck(body) : textAck(body, String(9000 + index)));
+  const plan = replySegments([...splitChatReply('甲<SPLIT>乙').map(text), media()]);
+  const receipts = [];
+  for (const segment of plan) {
+    const result = await f.backend.sendMessage(message(...segment));
+    receipts.push(...result.deliveryParts);
+  }
+  assert.deepEqual(f.calls.map(call => call.cmd), [522, 522, 110]);
+  assert.deepEqual(f.events.map(event => event.message[0].type), ['text', 'text', 'image']);
+  assert.deepEqual(f.events.slice(0, 2).map(event => event.message[0].data.text), ['甲', '乙']);
+  assert.deepEqual(receipts.slice(0, 2).map(part => part.text), ['甲', '乙']);
+  assert(receipts.every(part => part.state === 'acknowledged' && part.time === 1700000000 && Number.isFinite(part.observedAt)));
+});
+
+test('one explicit long/code bubble retains actual native chunk receipts without guessed history boundaries', async t => {
+  const f = fixture(t, (_cmd, body, index) => textAck(body, String(9100 + index)));
+  f.backend.options.segmentBytes = 64;
+  const original = '```text\n' + '长代码<SPLIT>字面\n\n'.repeat(20) + '```';
+  assert.deepEqual(splitChatReply(original), [original]);
+  const result = await f.backend.sendMessage(message(text(original)));
+  assert(result.deliveryParts.length > 1);
+  assert.equal(result.deliveryParts.map(part => part.text).join(''), original);
+  assert.equal(new Set(result.serverMessageIds).size, result.deliveryParts.length);
 });

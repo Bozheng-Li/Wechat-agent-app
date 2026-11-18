@@ -325,7 +325,9 @@ function createUpdater({
   // Writes the new installer by copying reused blocks from the old file and
   // fetching only the gaps. Any doubt throws DeltaFallback and the caller wipes
   // the partial file before falling back to one full download.
-  async function assemble({ plan, oldPath, partial, target, expected, total, report }) {
+  // `feed` is the download's own snapshot: `latest` is replaced by every check(),
+  // so the bytes below are always verified against one fixed record.
+  async function assemble({ feed, plan, oldPath, partial, target, expected, total, report }) {
     let oldFd, partFd;
     let copied = 0, fetched = 0, sinceYield = 0;
     const buffer = Buffer.allocUnsafe(COPY_CHUNK);
@@ -354,7 +356,7 @@ function createUpdater({
         if (controller.signal.aborted) throw cancelled();
         let response;
         try {
-          response = await fetchImpl(latest.fileURL, {
+          response = await fetchImpl(feed.fileURL, {
             headers: { accept: '*/*', range: `bytes=${range.start}-${range.end - 1}` },
             redirect: 'follow',
             cache: 'no-store',
@@ -396,7 +398,9 @@ function createUpdater({
     }
     if (controller.signal.aborted) throw cancelled();
     if (fs.statSync(partial).size !== expected) throw new DeltaFallback('增量组装大小不符');
-    if (latest.sha512 && sha512File(partial) !== latest.sha512) throw new DeltaFallback('增量组装校验失败');
+    // A missing digest is not a pass: the assembled file falls back to a full,
+    // verified download like any other doubt about the differential path.
+    if (!feed.sha512 || sha512File(partial) !== feed.sha512) throw new DeltaFallback('增量组装校验失败');
     fs.rmSync(target, { force: true });
     fs.renameSync(partial, target);
     installed = target;
@@ -404,8 +408,8 @@ function createUpdater({
     return { savedBytes: plan.reusedBytes, fetchedBytes: fetched };
   }
 
-  async function attemptDifferential({ target, partial, report }) {
-    const usable = readCache().filter(entry => entry.fileName !== latest.fileName
+  async function attemptDifferential({ feed, target, partial, report }) {
+    const usable = readCache().filter(entry => entry.fileName !== feed.fileName
       && fs.existsSync(path.join(updates, entry.fileName)));
     if (!usable.length) return null;
     const wanted = normalizeVersion(currentVersion);
@@ -413,29 +417,29 @@ function createUpdater({
     const oldPath = path.join(updates, old.fileName);
     const oldLayout = await loadOldLayout(old, oldPath);
     if (fs.statSync(oldPath).size !== oldLayout.size) throw new DeltaFallback('旧安装包大小与 blockmap 不符');
-    const buffer = await fetchBlockmapBuffer(siblingBlockmap(latest.fileURL), controller.signal);
+    const buffer = await fetchBlockmapBuffer(siblingBlockmap(feed.fileURL), controller.signal);
     const newLayout = blockLayout(parseBlockmap(buffer));
-    if (latest.size && newLayout.size !== latest.size) throw new DeltaFallback('新 blockmap 与安装包大小不符');
+    if (feed.size && newLayout.size !== feed.size) throw new DeltaFallback('新 blockmap 与安装包大小不符');
     const plan = planDelta(oldLayout, newLayout);
     if (plan.reusedBytes / newLayout.size < MIN_REUSE) throw new DeltaFallback('可复用分块太少');
-    const total = latest.size || newLayout.size;
+    const total = feed.size || newLayout.size;
     const result = await assemble({
-      plan, oldPath, partial, target, expected: newLayout.size, total, report,
+      feed, plan, oldPath, partial, target, expected: newLayout.size, total, report,
     });
     return { ...result, blockmap: buffer };
   }
 
   // ---- full download ----------------------------------------------------------
-  async function downloadFull({ target, partial, report }) {
+  async function downloadFull({ feed, target, partial, report }) {
     let response;
     try {
-      response = await fetchImpl(latest.fileURL, { headers: { accept: '*/*' }, redirect: 'follow', cache: 'no-store', signal: controller.signal });
+      response = await fetchImpl(feed.fileURL, { headers: { accept: '*/*' }, redirect: 'follow', cache: 'no-store', signal: controller.signal });
     } catch (error) {
       if (controller.signal.aborted) throw cancelled();
       throw new UpdateError('UPDATE_DOWNLOAD_FAILED', '下载更新包失败，请检查网络后重试');
     }
     if (!response || !response.ok || !response.body) throw new UpdateError('UPDATE_DOWNLOAD_FAILED', '更新包地址不可用');
-    const total = Number(response.headers?.get?.('content-length')) || latest.size || 0;
+    const total = Number(response.headers?.get?.('content-length')) || feed.size || 0;
     const hash = crypto.createHash('sha512');
     let received = 0;
     report(0, total, true);
@@ -451,10 +455,11 @@ function createUpdater({
     await pipeline(stream, counter, fs.createWriteStream(partial));
     report(received, total, true);
     const digest = hash.digest('base64');
-    if (latest.sha512 && digest !== latest.sha512) {
+    // No digest is a failed verification, never a skipped one.
+    if (!feed.sha512 || digest !== feed.sha512) {
       throw new UpdateError('UPDATE_HASH_MISMATCH', '更新包校验失败，已丢弃下载内容');
     }
-    if (latest.size && received !== latest.size) throw new UpdateError('UPDATE_HASH_MISMATCH', '更新包大小不符，已丢弃下载内容');
+    if (feed.size && received !== feed.size) throw new UpdateError('UPDATE_HASH_MISMATCH', '更新包大小不符，已丢弃下载内容');
     fs.rmSync(target, { force: true });
     fs.renameSync(partial, target);
     installed = target;
@@ -463,9 +468,9 @@ function createUpdater({
 
   // Storing the new blockmap is what makes the next release differential; it is
   // always best effort and must never turn a finished download into a failure.
-  async function storeBlockmap(destination, buffer) {
+  async function storeBlockmap(feed, destination, buffer) {
     try {
-      const body = buffer || await fetchBlockmapBuffer(siblingBlockmap(latest.fileURL), controller?.signal);
+      const body = buffer || await fetchBlockmapBuffer(siblingBlockmap(feed.fileURL), controller?.signal);
       fs.writeFileSync(destination, body);
     } catch {}
   }
@@ -499,55 +504,62 @@ function createUpdater({
 
   async function download(onProgress = () => {}) {
     if (downloading) throw new UpdateError('UPDATE_BUSY', '更新包正在下载');
-    if (!latest || latest.status !== 'available') await check();
-    if (!latest || latest.status !== 'available') throw new UpdateError('UPDATE_NOT_AVAILABLE', '当前已是最新版本');
-    // Without a checksum the download cannot be verified, and the banner below still
-    // promises "已通过 SHA-512 校验": refuse instead of installing unverified bytes.
-    if (!latest.sha512) throw new UpdateError('UPDATE_UNVERIFIED', '更新信息缺少校验值，未下载；请通过官方渠道重新检查更新');
-    fs.mkdirSync(updates, { recursive: true });
-    const target = path.join(updates, latest.fileName), partial = target + '.part';
-    controller = new AbortController();
+    // The slot is claimed before the first await: check() below suspends, and a
+    // second click arriving in that window used to start a parallel download.
     downloading = true;
-    latestDifferential = null;
-    let reportedAt = 0;
-    const report = (value, total, force = false) => {
-      const now = Date.now();
-      if (!force && now - reportedAt < 150) return;
-      reportedAt = now;
-      onProgress({ received: value, total: total || latest.size || 0, percent: percentOf(value, total || latest.size) });
-    };
-    let differential = { used: false };
     try {
-      let outcome = null;
+      if (!latest || latest.status !== 'available') await check();
+      // The feed is snapshotted for the whole chain: a concurrent check() replaces
+      // `latest`, and every step must verify the one file that is named here.
+      const feed = latest;
+      if (!feed || feed.status !== 'available') throw new UpdateError('UPDATE_NOT_AVAILABLE', '当前已是最新版本');
+      // Without a checksum the download cannot be verified, and the banner below still
+      // promises "已通过 SHA-512 校验": refuse instead of installing unverified bytes.
+      if (!feed.sha512) throw new UpdateError('UPDATE_UNVERIFIED', '更新信息缺少校验值，未下载；请通过官方渠道重新检查更新');
+      fs.mkdirSync(updates, { recursive: true });
+      const target = path.join(updates, feed.fileName), partial = target + '.part';
+      controller = new AbortController();
+      latestDifferential = null;
+      let reportedAt = 0;
+      const report = (value, total, force = false) => {
+        const now = Date.now();
+        if (!force && now - reportedAt < 150) return;
+        reportedAt = now;
+        onProgress({ received: value, total: total || feed.size || 0, percent: percentOf(value, total || feed.size) });
+      };
+      let differential = { used: false };
       try {
-        outcome = await attemptDifferential({ target, partial, report });
+        let outcome = null;
+        try {
+          outcome = await attemptDifferential({ feed, target, partial, report });
+        } catch (error) {
+          fs.rmSync(partial, { force: true });
+          if (error instanceof UpdateError && error.code === 'UPDATE_CANCELLED') throw error;
+          if (controller.signal.aborted) throw cancelled();
+          outcome = null; // any doubt: the full path below is authoritative
+        }
+        const size = outcome ? fs.statSync(target).size : await downloadFull({ feed, target, partial, report });
+        if (outcome) {
+          differential = { used: true, savedBytes: outcome.savedBytes, fetchedBytes: outcome.fetchedBytes };
+          report(size, feed.size || size, true);
+        }
+        rememberDownload({
+          version: feed.version,
+          fileName: feed.fileName,
+          size,
+          sha512: feed.sha512,
+          fileURL: feed.fileURL || '',
+          blockmapFile: feed.fileURL ? siblingBlockmap(feed.fileURL) : '',
+        });
+        await storeBlockmap(feed, target + '.blockmap', outcome?.blockmap);
+        latestDifferential = differential;
+        return { path: target, size, version: feed.version, percent: 100, differential };
       } catch (error) {
         fs.rmSync(partial, { force: true });
-        if (error instanceof UpdateError && error.code === 'UPDATE_CANCELLED') throw error;
+        if (error instanceof UpdateError) throw error;
         if (controller.signal.aborted) throw cancelled();
-        outcome = null; // any doubt: the full path below is authoritative
+        throw new UpdateError('UPDATE_DOWNLOAD_FAILED', '下载更新包时出错，请重试');
       }
-      const size = outcome ? fs.statSync(target).size : await downloadFull({ target, partial, report });
-      if (outcome) {
-        differential = { used: true, savedBytes: outcome.savedBytes, fetchedBytes: outcome.fetchedBytes };
-        report(size, latest.size || size, true);
-      }
-      rememberDownload({
-        version: latest.version,
-        fileName: latest.fileName,
-        size,
-        sha512: latest.sha512 || '',
-        fileURL: latest.fileURL || '',
-        blockmapFile: latest.fileURL ? siblingBlockmap(latest.fileURL) : '',
-      });
-      await storeBlockmap(target + '.blockmap', outcome?.blockmap);
-      latestDifferential = differential;
-      return { path: target, size, version: latest.version, percent: 100, differential };
-    } catch (error) {
-      fs.rmSync(partial, { force: true });
-      if (error instanceof UpdateError) throw error;
-      if (controller.signal.aborted) throw cancelled();
-      throw new UpdateError('UPDATE_DOWNLOAD_FAILED', '下载更新包时出错，请重试');
     } finally {
       downloading = false;
       controller = null;
@@ -580,7 +592,33 @@ function createUpdater({
     // The installer runs on first paint of its own window; the app then quits.
     install(target = installed, spawnImpl = spawn) {
       if (!target || !fs.existsSync(target)) throw new UpdateError('UPDATE_NO_PACKAGE', '还没有下载更新包');
-      if (path.resolve(path.dirname(target)) !== path.resolve(updates)) throw new UpdateError('UPDATE_NO_PACKAGE', '更新包位置不可用');
+      // Compare the resolved locations, not the written ones: a junction or a
+      // symlink under updates/ would otherwise pass and run a foreign executable.
+      let parent, resolved, expected;
+      try {
+        parent = fs.realpathSync(path.dirname(target));
+        resolved = fs.realpathSync(target);
+        expected = fs.realpathSync(updates);
+      } catch { throw new UpdateError('UPDATE_NO_PACKAGE', '更新包位置不可用'); }
+      if (parent !== expected || resolved !== path.join(expected, path.basename(resolved)))
+        throw new UpdateError('UPDATE_NO_PACKAGE', '更新包位置不可用');
+      const fileName = path.basename(target);
+      if (!PACKAGE_NAME.test(fileName)) throw new UpdateError('UPDATE_NO_PACKAGE', '还没有下载更新包');
+      // The file has been sitting on disk since the download, so it is verified
+      // once more against the record written then; an installer without a
+      // trustworthy record is removed instead of being executed.
+      const record = readCache().find(entry => entry.fileName === fileName && entry.sha512);
+      let verified = false;
+      if (record) {
+        try {
+          const { size } = fs.statSync(target);
+          verified = (!record.size || Number(record.size) === size) && sha512File(target) === record.sha512;
+        } catch { verified = false; }
+      }
+      if (!verified) {
+        fs.rmSync(target, { force: true });
+        throw new UpdateError('UPDATE_HASH_MISMATCH', '更新包校验失败，已删除，请重新下载');
+      }
       const child = spawnImpl(target, [], { detached: true, stdio: 'ignore', windowsHide: false });
       child.unref?.();
       return { launched: true, path: target };

@@ -368,9 +368,10 @@ export class ImageMemory {
       throw fail('INVALID_IMAGE_MEMORY_ID', '图片缺少原消息归属，未保存');
     return sha([scope.key, entry.messageId, attachment.resourceId]);
   }
-  needsCapture(input, entry, attachment) {
-    const state = this.load(input),
-      id = this.imageId(state, entry, attachment);
+  /** `state` is optional: callers scanning many attachments pass one loaded copy. */
+  needsCapture(input, entry, attachment, state) {
+    state ??= this.load(input);
+    const id = this.imageId(state, entry, attachment);
     return state.settings.enabled && !state.deleted[id] && !state.items[id];
   }
   async capture(input, entry, attachment, image, signal = noSignal(), { generation } = {}) {

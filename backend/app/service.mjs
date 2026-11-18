@@ -24,6 +24,11 @@ import { listTimeSettings } from '../../modules/settings/time.mjs';
 import { timeSettings, preserveTimeValues } from '../../shared/time-settings.mjs';
 import { filledRoleCardFields } from '../../shared/role-card.mjs';
 import { assertConversationAuthorized, conversationAuthorized } from '../../shared/authorization.mjs';
+import { previewPersonaChat } from '../../modules/agent/persona-chat.mjs';
+import { distillCandidates, distillPersona, issuePersonaDraft } from '../../modules/agent/style-distill.mjs';
+import { summarizeStyle } from '../../modules/agent/style-summary.mjs';
+import { authorizationEpoch, assertAuthorizationEpoch } from '../../shared/authorization.mjs';
+import { timeLimitMs } from '../../shared/time-settings.mjs';
 
 export function createPluginService({
   ctx,
@@ -41,6 +46,7 @@ export function createPluginService({
   dshSessionPath = null,
 }) {
   let mutations = Promise.resolve();
+  let personaChatRunning = false;
   const featureOperations = new Set();
   let cleanup = new OwnerCleanup(channel, scheduler);
   let discovered;
@@ -118,6 +124,7 @@ export function createPluginService({
       modelChoice: store?.modelChoice() ?? null,
       startupError,
       persona: store?.persona() ?? emptyPersona(),
+      personas: store?.personasView() ?? null,
       modelConfig: store?.modelConfig() ?? { maxTokens: null, temperature: null },
       capabilities: { vision: ctx?.capabilities?.vision === true, webSearch: ctx?.capabilities?.webSearch === true, momentsRead: state.momentsReadReady === true,
         momentsWrite: state.momentsWriteReady === true, momentsAudience: state.momentsAudienceReady === true,
@@ -248,6 +255,55 @@ export function createPluginService({
       if (relocating) throw new ChannelError('WORKSPACE_MOVING', '正在切换全局工作目录，请等待完成后重试');
       if (endpoint === 'changelog') return { markdown: fs.readFileSync(resourcePath('CHANGELOG.md'), 'utf8') };
       if (startupError) throw new ChannelError(startupError.code, startupError.message);
+      if (endpoint === 'persona.candidates') {
+        const account = currentAccount(payload);
+        return distillCandidates({ store, memory: channel.memory, accountId: account.id });
+      }
+      if (endpoint === 'persona.distill') {
+        const account = currentAccount(payload);
+        const draft = distillPersona({ store, memory: channel.memory, accountId: account.id, senderId: payload.senderId,
+          name: payload.name, title: payload.title, warmth: payload.warmth });
+        const epoch = authorizationEpoch(store, account.id);
+        const combined = AbortSignal.any([lifetime, ...(signal ? [signal] : []),
+          channel.authorization.combine(account.id, signal),
+          AbortSignal.timeout(timeLimitMs(store, 'conversationTimeoutSeconds'))]);
+        const check = () => {
+          assertLive(combined); currentAccount(payload);
+          assertAuthorizationEpoch(store, account.id, epoch);
+        };
+        const pending = (async () => {
+          const publicDraft = () => {
+            check();
+            const { samples, provenance, privacyEntities, ...visible } = draft;
+            return { ...visible, ...issuePersonaDraft(store, provenance, Date.now(), { entities: privacyEntities }) };
+          };
+          try {
+            const snapshot = await runner.memoryExecutionSnapshot(combined);
+            check();
+            const summary = await summarizeStyle({ ctx, selection: snapshot.selection,
+              profile: draft.profile, samples: draft.samples, sampling: draft.sampling,
+              entities: draft.privacyEntities, signal: combined });
+            return { ...publicDraft(), persona: { ...draft.persona, prompt: summary.text }, summarized: true, usage: summary.usage };
+          } catch (error) {
+            check();
+            return { ...publicDraft(), summarized: false,
+              summaryError: `${publicError(error, '模型总结失败').message} 已明确回退为统计模板，未采用模型正文。` };
+          }
+        })();
+        featureOperations.add(pending);
+        void pending.finally(() => featureOperations.delete(pending)).catch(() => {});
+        return pending;
+      }
+      if (endpoint === 'persona.chat') {
+        if (personaChatRunning) throw new ChannelError('PERSONA_CHAT_BUSY', '上一条试聊还在回复，请稍后再发');
+        const combined = AbortSignal.any([lifetime, ...(signal ? [signal] : []),
+          AbortSignal.timeout(timeLimitMs(store, 'conversationTimeoutSeconds'))]);
+        personaChatRunning = true;
+        const pending = previewPersonaChat(runner, payload, combined, () => assertLive(combined));
+        featureOperations.add(pending);
+        void pending.finally(() => { personaChatRunning = false; featureOperations.delete(pending); }).catch(() => {});
+        return pending;
+      }
       if (endpoint === 'identity.get') return identity.view();
       if (endpoint === 'time.list') return listTimeSettings({ store, channel, currentAccount, conversation }, payload);
       if (WORKBENCH_ENDPOINTS.includes(endpoint)) {

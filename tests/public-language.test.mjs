@@ -44,12 +44,15 @@ test('only one shipped persona and one global editor remain; conversation saves 
   assert.equal(PERSONA_PRESETS.length, 1);
   assert.equal(PERSONA_PRESETS[0].role, '默认助手（拟人）');
   const files = fs.readdirSync(new URL('../prompts/personas/', import.meta.url)).filter(name => name.endsWith('.mjs'));
-  assert.deepEqual(files.sort(), ['catalog.mjs', 'default.mjs', 'text.mjs']);
+  assert.deepEqual(files.sort(), ['catalog.mjs', 'conversation-skill.mjs', 'default.mjs', 'text.mjs']);
   const draft = configDraft({ persona: { name: '旧会话角色', aliases: [], prompt: '不应保存' } });
   assert(!Object.hasOwn(draft, 'persona'));
   assert.equal(configPayload({ ...draft, personaMode: 'custom', persona: { name: '旧草稿' } }).persona, null);
-  const manifest = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
-  assert(manifest.files.includes('prompts/reply/language.md'));
+  const manifest = JSON.parse(fs.readFileSync(new URL('../electron-builder.json', import.meta.url), 'utf8'));
+  const shipped = JSON.parse(fs.readFileSync(new URL('../scripts/shipped-prompts.json', import.meta.url), 'utf8')).files;
+  assert(!manifest.files.includes('prompts/**'));
+  assert(shipped.every(file => manifest.files.includes(file)));
+  assert(shipped.includes('prompts/personas/conversation-skill.md'));
 });
 
 test('expanded language review identifies service envelopes while keeping ordinary prose, code and exact quoted content', () => {

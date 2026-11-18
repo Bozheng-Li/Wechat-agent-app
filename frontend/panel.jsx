@@ -25,7 +25,7 @@ export function WechatPanel({ connection, catalog }) {
     document.addEventListener('pointerdown', dismiss);
     return () => { document.removeEventListener('keydown', dismiss); document.removeEventListener('pointerdown', dismiss); };
   }, [menuOpen]);
-  const { motion, status, page, memoryTab, busy, workspaceRef, action, navigate, navPage, warning } = state;
+  const { motion, status, page, memoryTab, busy, workspaceRef, navigate, navPage, warning, processingFault, retryWarning } = state;
   const sectionLabel = ['overview', 'authorization', 'records', 'moments'].includes(navPage) ? '日常'
     : ['tasks', 'digests', 'traces'].includes(navPage) ? '自动化' : '管理';
   const content = <PanelContent connection={connection} catalog={catalog} state={state} update={update} />;
@@ -145,7 +145,7 @@ export function WechatPanel({ connection, catalog }) {
             <div className="wa-alert is-error" role="alert">
               <div className="wa-between">
                 <span>{warning}</span>
-                <Button quiet disabled={!!busy} icon="refresh" onClick={() => action('status')}>
+                <Button quiet disabled={!!busy} icon="refresh" onClick={() => retryWarning()}>
                   重新读取
                 </Button>
               </div>
@@ -154,6 +154,11 @@ export function WechatPanel({ connection, catalog }) {
           <div className="wa-update-slot" aria-live="polite">
             {update.banner && state.page !== 'updates' && <UpdateBanner update={update} />}
           </div>
+          {processingFault && (
+            <p className="wa-note-box wa-section-space" role="status">
+              {processingFault}
+            </p>
+          )}
           {content}
         </main>
       </div>

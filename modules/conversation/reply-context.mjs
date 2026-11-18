@@ -72,6 +72,17 @@ export function recentReplyHistory(history, { maxChars = 10000, maxEntries = 20,
   return entries.reverse();
 }
 
+function recentCorrectionReference(recent, query, names, maxChars) {
+  const candidates = recent.filter(entry => entry.direction === 'incoming' && entry.text).filter(entry => {
+    const direct = entry.text.replace(/```[\s\S]*?```|`[^`]*`|[“「『][^”」』]*[”」』]|"[^"]*"/gu, '');
+    return !/假如|假设|举例/u.test(direct) && /更正|修正|说错了|记错了|已经作废|不是[^。！？\n]{1,40}(?:而是|是)|(?:我|我们|我的)[^。！？\n]{0,16}(?:改成|改为|不再|现在(?:改|只|换|是)|换成)/u.test(direct);
+  }).slice(-4);
+  const source = candidates.map(entry => JSON.stringify({ sourceType: 'recent-direct-correction',
+    senderId: entry.senderId, speaker: entry.senderName || entry.senderId, time: entry.time,
+    direction: 'incoming', status: '近期原话；只更正该来源明确涉及的人物/事项，不改其他人的事实', text: entry.text })).join('\n');
+  return relevantMemoryReference(source, query, { maxChars: Math.min(1400, maxChars), names }).text;
+}
+
 export function replyMemoryContext({ snapshot, text, longTerm = '', role, onDemand = false, ambient = false, persona, promptStrategy = 'legacy' }) {
   // The saved window is also the deletion/expiry boundary. Chat archives may
   // retain records after a memory clear; they must not silently restore them.
@@ -98,11 +109,16 @@ export function replyMemoryContext({ snapshot, text, longTerm = '', role, onDema
     ? recent.filter((entry) => entry.direction === 'incoming').slice(-3).map((entry) => entry.text).join(' ')
     : text;
   const roleText = role?.memory || '';
-  const reference = relevantMemoryReference([role ? role.legacyMemory : longTerm, memoryText(old)].filter(Boolean).join('\n\n'), query, {
-    maxChars: role ? Math.max(0, 3000 - roleText.length - 2) : progressive ? 3000 : 6000,
-    names: [persona?.name, ...(persona?.aliases || [])].filter(Boolean),
-  });
-  const memory = [roleText, reference.text].filter(Boolean).join('\n\n');
+  const names = [persona?.name, ...(persona?.aliases || [])].filter(Boolean);
+  const maxChars = role ? Math.max(0, 3000 - roleText.length - 2) : progressive ? 3000 : 6000;
+  const source = [role ? role.legacyMemory : longTerm, memoryText(old)].filter(Boolean).join('\n\n');
+  let reference = relevantMemoryReference(source, query, { maxChars, names });
+  // If older material is admitted, keep relevant recent corrections next to it
+  // (and later in order), rather than letting a detached summary outvote them.
+  const corrections = reference.text ? recentCorrectionReference(recent, query, names, maxChars) : '';
+  if (corrections) reference = relevantMemoryReference(source, query,
+    { maxChars: Math.max(0, maxChars - corrections.length - 2), names });
+  const memory = [roleText, reference.text, corrections].filter(Boolean).join('\n\n');
   return {
     history: recent,
     memory: memory || undefined,

@@ -38,7 +38,11 @@ export class ObjectAuthorization {
       const scope = { ...input, chatType: input.chatType || (input.peerId?.endsWith('@chatroom') ? 'group' : 'private') };
       assertConversationAuthorized(channel.store, scope); return scope;
     };
-    for (const name of ['send', 'media', 'files', 'reference']) wrap(name, conversation);
+    // Sends retain real in-flight ACKs even after cancellation/revocation. The
+    // transport checks the signal before each new write; later split messages
+    // are checked again by the conversation sender.
+    wrap('send', conversation, value => value, 'send');
+    for (const name of ['media', 'files', 'reference']) wrap(name, conversation);
     const read = async (input, signal, check) => {
       if (input.query?.userId && input.query.userId !== input.accountId && !personAuthorized(channel.store, input.accountId, input.query.userId))
         throw new ChannelError('OBJECT_NOT_AUTHORIZED', '这位好友未授权，未读取朋友圈。', { snsDelivery: 'not-sent' });
@@ -108,13 +112,13 @@ export class ObjectAuthorization {
       assertAuthorizationEpoch(this.channel.store, accountId, epoch);
     };
     check();
-    const checkResult = receipt ? () => {
+    const checkResult = receipt === 'send' ? () => {} : receipt ? () => {
       assertAuthorizationEpoch(this.channel.store, accountId, epoch);
       if (this.isCleaning(accountId)) throw stopping();
     } : check;
     let listener, revoke;
     const aborted = new Promise((_, reject) => {
-      revoke = () => reject(stopping());
+      revoke = () => { if (receipt !== 'send') reject(stopping()); };
       listener = () => { if (!receipt) reject(combined.reason); };
       combined.addEventListener('abort', listener, { once: true });
     });
@@ -181,19 +185,46 @@ export class ObjectAuthorization {
   reconcile() {
     const { channel } = this;
     const scopes = storedObjectScopes(channel).filter(scope => !conversationScopeAuthorized(channel.store, scope));
-    if (scopes.length) {
-      const rows = channel.store.data.authorizationRevocations;
-      for (const scope of scopes) if (!rows.some(row => row.accountId === scope.accountId && row.chatType === scope.chatType && row.peerId === scope.peerId)) {
-        rows.push(scope);
-        this.attempts.delete(scope.accountId);
-        this.stuck.delete(scope.accountId);
+    // The journal is pruned even when nothing is left to revoke: a queue entry whose
+    // data no longer exists (a synthetic id, or a scope already cleaned) would
+    // otherwise run the whole purge again on every start — reading every trace file
+    // for minutes before the window could answer Windows.
+    const rows = channel.store.data.authorizationRevocations, before = rows.length;
+    const previousRows = structuredClone(rows);
+    for (const scope of scopes) if (!rows.some(row => row.accountId === scope.accountId && row.chatType === scope.chatType && row.peerId === scope.peerId)) {
+      rows.push(scope);
+      this.attempts.delete(scope.accountId);
+      this.stuck.delete(scope.accountId);
+    }
+    // Rows for scopes the owner has authorised again must not stay queued: a
+    // stale revocation would delete freshly restored conversation data later.
+    const live = new Set(scopes.map(scope => [scope.accountId, scope.chatType, scope.peerId].join('\u0000')));
+    const kept = rows.filter(row => live.has([row.accountId, row.chatType, row.peerId].join('\u0000')));
+    if (kept.length !== rows.length) {
+      rows.length = 0; rows.push(...kept);
+      for (const row of kept) { this.attempts.delete(row.accountId); this.stuck.delete(row.accountId); }
+    }
+    try {
+      if (scopes.length || rows.length !== before) channel.store.save();
+    } catch (error) {
+      // Startup must not throw synchronously or lose the uncommitted denial journal.
+      rows.length = 0; rows.push(...previousRows);
+      this.error = '授权已撤销，部分数据清理未完成：' + error.message;
+      clearTimeout(this.retryTimer);
+      if (!this.closed) {
+        this.retryTimer = setTimeout(() => { void this.reconcile().catch(() => {}); }, 30000);
+        this.retryTimer.unref?.();
       }
-      // Rows for scopes the owner has authorised again must not stay queued: a
-      // stale revocation would delete freshly restored conversation data later.
-      const live = new Set(scopes.map(scope => [scope.accountId, scope.chatType, scope.peerId].join('\u0000')));
-      const kept = rows.filter(row => live.has([row.accountId, row.chatType, row.peerId].join('\u0000')));
-      if (kept.length !== rows.length) { rows.length = 0; rows.push(...kept); }
-      channel.store.save();
+      this.pending = Promise.reject(error);
+      void this.pending.catch(() => {});
+      return this.pending;
+    }
+    if (!channel.store.data.authorizationRevocations.length) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = undefined;
+      if (this.error !== undefined) this.error = null;
+      this.pending = this.pending.catch(() => {});
+      return this.pending;
     }
     return this.enqueue(channel.store.data.authorizationRevocations);
   }

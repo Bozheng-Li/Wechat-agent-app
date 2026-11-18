@@ -15,6 +15,14 @@ const MAX_RETRY_DELAY_MS = 60 * 60 * 1000;
 // The run log is append-only; a 1-minute interval task would otherwise grow
 // schedules.json by half a million rows a year.
 const MAX_RUNS = 2000;
+// A single failed save — a transient disk error on Windows — used to stop the
+// scheduler for ever and leave every pending task without a runner.
+const MAX_SCHEDULER_FAILURES = 5;
+// Finished tasks had no retention at all: a one-off reminder a day left a row a
+// day in schedules.json for ever.
+const MAX_FINISHED_TASKS = 500;
+const FINISHED_TASK_AGE_MS = 30 * 86400000;
+const FINISHED_TASK_STATES = new Set(['completed', 'cancelled']);
 const memberId = (value) =>
   typeof value === 'string' &&
   /^[\w@.:-]{1,256}$/.test(value) &&
@@ -187,10 +195,32 @@ export class TaskScheduler {
   }
   pruneRuns() {
     const runs = this.data.runs;
-    if (!Array.isArray(runs) || runs.length <= MAX_RUNS) return;
-    const referenced = new Set(this.data.tasks.map((task) => task.runId).filter(Boolean));
-    const newest = new Set(runs.slice(-MAX_RUNS).map((run) => run.id));
-    this.data.runs = runs.filter((run) => newest.has(run.id) || referenced.has(run.id));
+    if (!Array.isArray(runs)) return;
+    if (runs.length > MAX_RUNS) {
+      const referenced = new Set(this.data.tasks.map((task) => task.runId).filter(Boolean));
+      const newest = new Set(runs.slice(-MAX_RUNS).map((run) => run.id));
+      this.data.runs = runs.filter((run) => newest.has(run.id) || referenced.has(run.id));
+    }
+    // Finished tasks used to stay for ever, so an account that fires a one-off
+    // reminder every day grew a row a day. Keep the newest ones (and the runs
+    // they still cite) and drop the old rows the owner can no longer act on.
+    const tasks = this.data.tasks;
+    if (!Array.isArray(tasks) || !tasks.length) return;
+    const runIds = new Set(this.data.runs.map((run) => run.id));
+    const cutoff = this.now() - FINISHED_TASK_AGE_MS;
+    const finished = tasks
+      .filter((task) => FINISHED_TASK_STATES.has(task.state))
+      .sort((a, b) => (b.updatedAt || b.createdAt || 0) - (a.updatedAt || a.createdAt || 0));
+    const dropped = new Set(
+      finished
+        .filter(
+          (task, index) =>
+            index >= MAX_FINISHED_TASKS ||
+            ((task.updatedAt || task.createdAt || 0) < cutoff && !(task.runId && runIds.has(task.runId)))
+        )
+        .map((task) => task.id)
+    );
+    if (dropped.size) this.data.tasks = tasks.filter((task) => !dropped.has(task.id));
   }
   authorized(selector, fromChat = false) {
     assertConversationAuthorized(this.store, selector);
@@ -331,6 +361,12 @@ export class TaskScheduler {
       const previous = this.data.tasks.find((task) => task.requestKey === requestKey);
       if (previous) return clone(previous);
     }
+    // A dead scheduler would never pick the task up, so a "successful" creation
+    // would only pile up reminders that never run. `stopped` alone cannot be the
+    // signal: it is also the initial state before start(), and chat/UI legitimately
+    // create tasks during startup, so only a stop caused by repeated failures
+    // refuses new work.
+    if (this.failed) throw new ChannelError('TASKS_STOPPED', '定时任务已暂停，请重启应用后重新创建');
     const schedule = validateSchedule(input.schedule, this.now());
     if (this.data.tasks.filter((task) => task.accountId === scope.accountId && active.has(task.state)).length >= 100)
       throw new ChannelError('TASK_LIMIT', '当前账号最多保留 100 个活动任务，请先取消不再需要的任务');
@@ -401,7 +437,13 @@ export class TaskScheduler {
       Object.assign(task, previous);
       throw error;
     }
-    if (this.current?.task.id === id) this.current.controller.abort(new ChannelError('CANCELLED', '定时任务已取消'));
+    if (this.current?.task.id === id) {
+      // The abort races a send that may already be on the wire: "cancelled"
+      // here would claim nothing reached WeChat.
+      const run = this.data.runs.find((value) => value.id === this.current.task.runId);
+      if (run && !run.finishedAt) run.state = 'unknown';
+      this.current.controller.abort(new ChannelError('CANCELLED', '定时任务已取消'));
+    }
     return clone(task);
   }
   pause(id, scope) {
@@ -445,15 +487,17 @@ export class TaskScheduler {
         (task.peerId === selector.peerId &&
           task.chatType === selector.chatType &&
           (!selector.senderId || task.senderId === selector.senderId)));
+    // conversations() builds a full view per conversation, so read it once for
+    // the whole list instead of once per task.
+    const names = new Map(
+      this.store.conversations(accountId).map((peer) => [`${peer.chatType}\u0000${peer.peerId}`, peer.name])
+    );
     const tasks = this.data.tasks
       .filter(match)
       .map((task) => ({
         ...clone(task),
         overdue: task.state === 'pending' && task.nextRunAt <= this.now(),
-        name:
-          this.store
-            .conversations(accountId)
-            .find((peer) => peer.peerId === task.peerId && peer.chatType === task.chatType)?.name || task.peerId,
+        name: names.get(`${task.chatType}\u0000${task.peerId}`) || task.peerId,
       }));
     const ids = new Set(tasks.map((task) => task.id));
     return {
@@ -468,6 +512,8 @@ export class TaskScheduler {
   }
   start() {
     this.stopped = false;
+    this.failed = false;
+    this.failures = 0;
     // A run that stopped on an error left its interval alive: installing another
     // one points this.timer at the new handle and leaks the old 1 Hz timer.
     if (this.timer) {
@@ -476,8 +522,18 @@ export class TaskScheduler {
     }
     this.timer = setInterval(() => {
       void this.tick().catch((error) => {
-        this.error = error instanceof ChannelError ? error.message : '任务调度异常，已停止自动执行';
-        this.stopped = true;
+        // One failed save — a transient disk error on Windows — must not stop
+        // the scheduler for ever: keep retrying, and only give up once every
+        // round keeps failing.
+        this.failures = (this.failures || 0) + 1;
+        this.stopped = this.failures >= MAX_SCHEDULER_FAILURES;
+        if (this.stopped) this.failed = true;
+        this.error =
+          error instanceof ChannelError
+            ? error.message
+            : this.stopped
+              ? '任务调度异常，已停止自动执行'
+              : '任务调度异常，稍后自动重试';
       });
     }, 1000);
     this.timer.unref?.();
@@ -487,6 +543,12 @@ export class TaskScheduler {
     this.running = this.drain();
     try {
       await this.running;
+      // A clean round means the failure streak is over. Only clear a message
+      // this counter owns: other components also write to this.error.
+      if (this.failures) {
+        this.failures = 0;
+        this.error = null;
+      }
     } finally {
       this.running = null;
     }
@@ -595,15 +657,24 @@ export class TaskScheduler {
           }
         }
       } catch (error) {
+        const record = this.store.data.records.find((value) => value.key === task.recordKey);
+        // Same evidence rule as the restart path: a send that was already on the
+        // wire can have reached WeChat even though this call failed, so only a
+        // confirmed unsent attempt may be recorded as "failed".
+        const uncertain =
+          !!record?.sendAttempted && !['rejected', 'not-sent'].includes(error?.details?.delivery ?? record?.delivery);
         Object.assign(run, {
-          state: 'failed',
-          reason: error instanceof ChannelError ? error.message : '任务执行失败，请检查处理记录',
+          state: uncertain ? 'unknown' : 'failed',
+          reason: uncertain
+            ? '上次发送结果不明，请先在微信核对'
+            : error instanceof ChannelError
+              ? error.message
+              : '任务执行失败，请检查处理记录',
           finishedAt: this.now(),
         });
-        task.lastState = 'failed';
+        task.lastState = run.state;
         task.lastError = run.reason;
         if (task.state === 'running') {
-          const record = this.store.data.records.find((value) => value.key === task.recordKey);
           const attempt = (task.attempts = (task.attempts || 0) + 1);
           if (record?.sendAttempted || attempt >= MAX_RETRY_ATTEMPTS) {
             task.state = 'paused';

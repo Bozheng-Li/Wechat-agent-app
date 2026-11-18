@@ -7,7 +7,7 @@ import { DigestsPage } from "./pages/digests/page.jsx";
 import { peerId, peerType, splitLines } from "./shared/conversations.mjs";
 import { same, personaDraft, modelDraft, storageDraft, configDraft, configPayload, remoteDraft } from "./shared/drafts.mjs";
 import { AdministratorSettings } from './pages/settings/administrators-page.jsx';
-import { call } from "./shared/rpc.mjs";
+import { call, withTimeout } from "./shared/rpc.mjs";
 import { PageHead } from "./components/page-ui.jsx";
 import { Overview } from "./pages/overview/page.jsx";
 import { Authorization } from "./pages/conversations/authorization-page.jsx";
@@ -99,13 +99,13 @@ export function PanelContent({ connection, catalog, state, update }) {
   else if (page === 'overview')
     content = <Overview status={status} busy={busy} blocked={blocked} onAction={action} onNavigate={navigate} />;
   else if (page === 'traces') content = <ExecutionTracesPage key={status.account?.id || 'offline'} status={status}
-    rpc={(endpoint, payload, signal) => call(connection, endpoint, payload, signal || AbortSignal.timeout(120000))} />;
+    rpc={(endpoint, payload, signal) => call(connection, endpoint, payload, withTimeout(signal, 120000))} />;
   else if (['diagnostics', 'digests', 'moments'].includes(page)) {
     const Page = { diagnostics: DiagnosticsPage, digests: DigestsPage, moments: MomentsPage }[page];
     content = (
       <Page
         key={page + ':' + (status.account?.id || 'offline')}
-        rpc={(endpoint, payload, signal) => call(connection, endpoint, payload, signal || AbortSignal.timeout(300000))}
+        rpc={(endpoint, payload, signal) => call(connection, endpoint, payload, withTimeout(signal, 300000))}
         status={status}
         onNavigate={navigate}
       />
@@ -136,7 +136,7 @@ export function PanelContent({ connection, catalog, state, update }) {
   else if (page === 'settings') content = <SettingsIndex status={status} onNavigate={navigate} />;
   else if (page === 'automation') content = <AutomationSettings key={status.account?.id || 'offline'} status={status} rows={recordRows}
     target={automationTarget} blocked={blocked} notice={notice} onNavigate={navigate} onBack={back} backLabel={backLabel}
-    rpc={(endpoint, payload, signal) => call(connection, endpoint, payload, signal || AbortSignal.timeout(120000))}
+    rpc={(endpoint, payload, signal) => call(connection, endpoint, payload, withTimeout(signal, 120000))}
     onToggle={(feature, enabled) => {
       const current = statusRef.current.settings || {},
         next = { ...current, schedules: current.schedules ?? current.enabled, moments: current.moments ?? current.enabled };
@@ -148,7 +148,7 @@ export function PanelContent({ connection, catalog, state, update }) {
       }[feature] });
     }} />;
   else if (page === 'time') content = <TimeSettings key={status.account?.id || 'offline'} status={status} blocked={blocked}
-    rpc={(endpoint, payload, signal) => call(connection, endpoint, payload, AbortSignal.any([signal, AbortSignal.timeout(120000)]))} onBack={back} backLabel={backLabel} />;
+    rpc={(endpoint, payload, signal) => call(connection, endpoint, payload, withTimeout(signal, 120000))} onBack={back} backLabel={backLabel} />;
   else if (page === 'image-generation') content = <ImageGenerationSettings status={status} blocked={blocked}
     onAction={(endpoint, payload) => action(endpoint, payload, { area: 'image-generation' })} onBack={back} backLabel={backLabel} />;
   else if (page === 'identity')
@@ -252,6 +252,7 @@ export function PanelContent({ connection, catalog, state, update }) {
   else if (page === 'persona')
     content = (
       <PersonaSettings
+        rpc={(endpoint, payload, signal) => call(connection, endpoint, payload, signal)}
         draft={drafts.persona}
         blocked={blocked}
         busy={busyArea === 'persona' ? busy : ''}
@@ -262,8 +263,10 @@ export function PanelContent({ connection, catalog, state, update }) {
           action(
             'persona.save',
             {
+              id: status.personas?.activeId,
               persona: {
-                ...draftsRef.current.persona,
+                personaMode: draftsRef.current.persona.personaMode || 'standard',
+                prompt: draftsRef.current.persona.prompt,
                 name: draftsRef.current.persona.name.trim(),
                 aliases: splitLines(draftsRef.current.persona.aliases),
               },
@@ -277,6 +280,18 @@ export function PanelContent({ connection, catalog, state, update }) {
         onBack={back}
         backLabel={backLabel}
         onRestoreDefault={restoreDefaultPersona}
+        personas={status.personas}
+        accountId={status.account?.id}
+        onSelectPersona={(id) =>
+          action('persona.select', { id }, { area: 'persona', force: ['persona'], text: '已切换人设，之后的回复使用新的人设。' })
+        }
+        onCreatePersona={({ persona, name, draftToken, accountId, senderId, source = 'distilled' }) =>
+          action('persona.create', { persona, name, draftToken, accountId, senderId, source: source === 'manual' ? 'manual' : 'distilled' },
+            { area: 'persona', force: ['persona'], text: '新人设已保存并选用，之后的回复使用它。' })
+        }
+        onDeletePersona={(id) =>
+          action('persona.delete', { id }, { area: 'persona', force: ['persona'], text: '人设已删除。' })
+        }
       />
     );
   else if (page === 'storage')
@@ -327,7 +342,7 @@ export function PanelContent({ connection, catalog, state, update }) {
               chatType: peerType(detail),
               peerId: peerId(detail),
               config: configPayload({ ...draftsRef.current.conversation,
-                natural: preserveTimeValues('natural', draftsRef.current.conversation.natural, detail.config.natural) }),
+                natural: preserveTimeValues('natural', draftsRef.current.conversation.natural, detail?.config?.natural ?? {}) }),
               preserveTimeSettings: true,
             },
             { area: 'conversation', force: ['conversation'], text: '此会话的设置已保存，之后的回复使用新设置。' }
@@ -364,14 +379,12 @@ export function PanelContent({ connection, catalog, state, update }) {
             connection,
             endpoint,
             payload,
-            signal ||
-              AbortSignal.timeout(
-                ['memory.compress', 'memory.retryImages', 'memory.global.extract', 'memory.images.import'].includes(
-                  endpoint
-                )
-                  ? 300000
-                  : 30000
-              )
+            withTimeout(
+              signal,
+              ['memory.compress', 'memory.retryImages', 'memory.global.extract', 'memory.images.import'].includes(endpoint)
+                ? 300000
+                : 30000
+            )
           )
         }
         status={status}
@@ -389,7 +402,7 @@ export function PanelContent({ connection, catalog, state, update }) {
             connection,
             endpoint,
             payload,
-            signal || AbortSignal.timeout(endpoint === 'assets.describe' ? 300000 : 30000)
+            withTimeout(signal, endpoint === 'assets.describe' ? 300000 : 30000)
           )
         }
         status={status}
@@ -400,7 +413,7 @@ export function PanelContent({ connection, catalog, state, update }) {
     content = (
       <TasksPage
         key={status.account?.id || 'offline'}
-        rpc={(endpoint, payload, signal) => call(connection, endpoint, payload, signal || AbortSignal.timeout(30000))}
+        rpc={(endpoint, payload, signal) => call(connection, endpoint, payload, withTimeout(signal, 30000))}
         status={status}
         rows={rows}
         initialPeer={detail}
@@ -442,7 +455,7 @@ export function PanelContent({ connection, catalog, state, update }) {
     content = (
       <RecoveryPage
         key={status.account?.id || 'offline'}
-        rpc={(endpoint, payload, signal) => call(connection, endpoint, payload, signal || AbortSignal.timeout(300000))}
+        rpc={(endpoint, payload, signal) => call(connection, endpoint, payload, withTimeout(signal, 300000))}
         status={status}
       />
     );

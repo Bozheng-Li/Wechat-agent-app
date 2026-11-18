@@ -1,4 +1,4 @@
-﻿import { loginLabels } from "../../shared/labels.mjs";
+import { loginLabels } from "../../shared/labels.mjs";
 import { Glyph } from "../../components/glyph.jsx";
 import { Button } from "../../components/button.jsx";
 
@@ -44,7 +44,7 @@ export function AccountCard({ status, busy, blocked, onAction }) {
         <img className="wa-qr" src={status.login.image} alt="微信登录二维码" />
         <p className="wa-help wa-qr-caption">{status.login.state === 'scanned' ? '已扫码，请在手机确认本次登录。' : '请使用手机微信扫码。'}</p>
       </>}
-      {!status.runtimeReady && <p className="wa-alert wa-section-space">缺少登录组件，请使用完整的 Windows x64 安装包重新安装应用。</p>}
+      {status.runtimeReady === false && !status.startupError && <p className="wa-alert wa-section-space">登录组件尚未就绪。若启动完成后仍显示此提示，请检查完整的 Windows x64 安装包及组件路径。</p>}
     </section>
   );
 }

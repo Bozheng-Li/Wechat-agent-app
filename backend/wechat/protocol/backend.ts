@@ -621,8 +621,10 @@ export class ProtocolBackend implements Backend {
     if (mediaCount && !imageBase) throw new BridgeError(parts.some(part => part.type === 'image' || part.type === 'face') ? 'ERR_IMAGE_CREDENTIAL' : 'ERR_FILE_CREDENTIAL', '当前会话的媒体发送参数未完整交接，请更新插件后重试；整条回复尚未发送', { delivery: 'rejected' });
     const signal = cancel ? AbortSignal.any([this.controller!.signal, cancel]) : this.controller!.signal; this.sendPending++; this.queuedMediaBytes += mediaBytes;
     const task = this.sendTail.then(async () => {
-      const ids: string[] = []; let first: BridgeMessage | undefined, currentIndex = -1, requestStarted = false;
-      const deliveryParts = () => parts.map((part, index) => ({ index, type: part.type, state: index < ids.length ? 'acknowledged' : index === currentIndex && requestStarted ? 'unknown' : 'not-sent', ...(ids[index] ? { serverMessageId: ids[index] } : {}),
+      const ids: string[] = [], receipts: { time: number; observedAt: number }[] = [];
+      let first: BridgeMessage | undefined, currentIndex = -1, requestStarted = false;
+      const deliveryParts = () => parts.map((part, index) => ({ index, type: part.type, state: index < ids.length ? 'acknowledged' : index === currentIndex && requestStarted ? 'unknown' : 'not-sent', ...(ids[index] ? { serverMessageId: ids[index], ...receipts[index] } : {}),
+        ...(part.type === 'text' ? { text: part.text } : {}),
         ...(part.type === 'image' && part.nativeFallback ? { nativeFallback: true } : {}),
         ...(part.type !== 'text' && part.name ? { name: part.name, bytes: part.bytes.length, sha256: part.sha256 } : {}) }));
       try {
@@ -702,10 +704,11 @@ export class ProtocolBackend implements Backend {
             if (!final) throw new BridgeError('ERR_PROTOCOL', '图片上传缺少最终确认，发送结果未知');
             ack = final;
           }
-          ids.push(ack.id); this.sent++;
+          const observedAt = Date.now();
+          ids.push(ack.id); receipts.push({ time: ack.time, observedAt }); this.sent++;
           const c = this.session.value!;
           // The durable cache stores only media metadata, never base64 payloads.
-          const message: BridgeMessage = { id: `wx:${p.peerId}:${ack.id}`, serverMessageId: ack.id, time: ack.time, chatType: p.chatType, peerId: p.peerId, sender: { id: c.wxid, nickname: c.nickname }, message: part.type === 'text' ? [...(part.mentions || []).map(target => ({ type: 'at' as const, data: { qq: target.id, name: target.name } })), { type: 'text', data: { text: part.text } }] : part.type === 'face' ? [{ type: 'face', data: { file: 'unavailable', stickerMd5: part.md5 } }] : part.type === 'file' ? [{ type: 'file', data: { name: part.name, mediaType: part.mediaType, bytes: part.bytes.length, sha256: part.sha256 } }] : [{ type: 'image', data: { file: 'unavailable', mediaType: part.mediaType, bytes: part.bytes.length, sha256: part.sha256, ...(part.name ? { name: part.name } : {}) } }], direction: 'outgoing', source: part.type === 'text' ? 'longlink:SendMsg' : part.type === 'face' ? 'shortlink:SendEmoji' : part.type === 'file' ? 'shortlink:SendAppMsg' : 'longlink:UploadMsgImg', delivery: 'server-ack', observedAt: Date.now(), messageType: part.type === 'text' ? 1 : part.type === 'face' ? 47 : part.type === 'file' ? 49 : 3 };
+          const message: BridgeMessage = { id: `wx:${p.peerId}:${ack.id}`, serverMessageId: ack.id, time: ack.time, chatType: p.chatType, peerId: p.peerId, sender: { id: c.wxid, nickname: c.nickname }, message: part.type === 'text' ? [...(part.mentions || []).map(target => ({ type: 'at' as const, data: { qq: target.id, name: target.name } })), { type: 'text', data: { text: part.text } }] : part.type === 'face' ? [{ type: 'face', data: { file: 'unavailable', stickerMd5: part.md5 } }] : part.type === 'file' ? [{ type: 'file', data: { name: part.name, mediaType: part.mediaType, bytes: part.bytes.length, sha256: part.sha256 } }] : [{ type: 'image', data: { file: 'unavailable', mediaType: part.mediaType, bytes: part.bytes.length, sha256: part.sha256, ...(part.name ? { name: part.name } : {}) } }], direction: 'outgoing', source: part.type === 'text' ? 'longlink:SendMsg' : part.type === 'face' ? 'shortlink:SendEmoji' : part.type === 'file' ? 'shortlink:SendAppMsg' : 'longlink:UploadMsgImg', delivery: 'server-ack', observedAt, messageType: part.type === 'text' ? 1 : part.type === 'face' ? 47 : part.type === 'file' ? 49 : 3 };
           this.remember(message); this.persist(); first ??= message; this.emit({ type: 'event.message', payload: structuredClone(message) });
         }
       } catch (error) {

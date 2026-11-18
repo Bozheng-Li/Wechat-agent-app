@@ -21,6 +21,7 @@ export const recordInput = record => ({ question: record.question, accountId: re
   peerId: record.peerId, senderId: record.senderId, sender: record.sender, messageId: record.messageId, mode: record.mode,
   taskId: record.taskId, recoveryOf: record.recoveryOf });
 export const recordOutput = record => ({ state: record.state, reply: record.reply, replyDraft: record.replyDraft, replyMedia: record.replyMedia,
+  personaMode: record.personaMode, personaPasses: record.personaPasses,
   reason: record.reason, sentAt: record.sentAt, delivery: record.delivery, acknowledgedMessageIds: record.acknowledgedMessageIds,
   deliveryParts: record.deliveryParts, sessionId: record.sessionId, memoryReflection: record.memoryReflection, taskFallback: record.taskFallback });
 export const recordSpec = record => ({ key: 'record:' + record.key, type: recordType(record), accountId: record.accountId,

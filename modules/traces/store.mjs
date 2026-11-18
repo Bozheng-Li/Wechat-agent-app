@@ -21,6 +21,8 @@ const localMidnight = day => new Date(day + 'T00:00:00').getTime();
 const error = (code, message) => new ChannelError(code, message);
 const json = value => JSON.stringify(value, null, 2) + '\n';
 const TRACE_PRESETS = new Set(['all', 'meaningful']);
+// Memory is bounded by a small LRU of recent days; the disk keeps a longer window.
+const TRACE_CACHE_DAYS = 14, TRACE_RETENTION_DAYS = 30;
 const skipReason = value => {
   if (typeof value !== 'string') return undefined;
   const text = traceSnippet(value, 40).trim();
@@ -39,9 +41,10 @@ export class ExecutionTraces {
   constructor(store, { now = Date.now } = {}) {
     this.store = store; this.erased = new Set(); this.erasedSourceKeys = new Set();
     this.owner = store.data?.storeId; this.now = now; this.runtimeId = randomUUID();
-    this.days = new Map(); this.dirty = new Set(); this.contexts = new Map(); this.writer = Promise.resolve();
+    this.days = new Map(); this.erasedDays = new Set(); this.dirty = new Set(); this.contexts = new Map(); this.writer = Promise.resolve();
     this.pendingEvents = new Map(); this.pendingContent = new Map(); this.liveEvents = new Map(); this.contentCache = new Map(); this.durableSeq = new Map();
     this.startedAt = now(); this.closed = false; this.warning = null; this.revision = 0;
+    this.retentionWarning = null; this.prunedAt = null;
     this.root = store.root ? path.resolve(store.root, 'storage/traces') : null;
     this.enabled = !!(this.root && this.owner);
     if (!this.enabled) return;
@@ -54,6 +57,11 @@ export class ExecutionTraces {
         this.startedAt = value.startedAt;
       } else fs.writeFileSync(manifest, json({ version: 1, ownerStoreId: this.owner, startedAt: this.startedAt }), { flag: 'wx', mode: 0o600 });
     }, true);
+    if (!this.enabled) return;
+    // Retention never blocks or fails a caller: a failed sweep only leaves old days
+    // on disk and is reported through retentionWarning.
+    this.prune();
+    this.pruneTimer = setInterval(() => this.prune(), 86400000); this.pruneTimer.unref?.();
   }
   safe(action, disable = false) {
     try { return action(); }
@@ -82,19 +90,107 @@ export class ExecutionTraces {
   day(accountId, day) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) throw error('TRACE_DATE_INVALID', '执行日期不正确');
     const directory = path.join(this.accountFolder(accountId), day), key = accountId + ':' + day;
-    if (this.days.has(key)) return this.days.get(key);
+    if (this.days.has(key)) return this.remember(this.days.get(key));
     const file = this.local(path.join(directory, 'index.json'), false);
-    const record = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : { version: 1, ownerStoreId: this.owner, accountId, day, rows: [] };
+    const record = fs.existsSync(file) ? this.readIndex(file) : { version: 1, ownerStoreId: this.owner, accountId, day, rows: [] };
     if (record.version !== 1 || record.ownerStoreId !== this.owner || record.accountId !== accountId || record.day !== day || !Array.isArray(record.rows) ||
       record.rows.some(row => !validId(row.id) || dateOf(row.id) !== day || row.accountId !== accountId)) throw error('TRACE_INDEX_INVALID', '执行轨迹索引无法读取，原记录保留');
-    const value = { ...record, key, directory, file }; this.days.set(key, value);
+    const value = { ...record, key, directory, file }; this.erasedDays.delete(key); this.remember(value);
     for (const row of value.rows) if (TRACE_ACTIVE.has(row.state) && row.runtimeId !== this.runtimeId) {
       row.state = 'interrupted'; row.incomplete = true; row.finishedAt = row.updatedAt;
       row.note = '上次运行结束前未记录到最终结果；没有自动重新执行。'; this.mark(value);
     }
     return value;
   }
+  /** A truncated day index keeps its bytes and stays deletable from the cleanup page. */
+  readIndex(file) {
+    try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
+    catch { throw error('TRACE_INDEX_INVALID', '这一天的轨迹索引无法读取，已保留原文件；可导出后删除该日记录'); }
+  }
+  /** Cache the day as most recently used and drop idle days past the cache window. */
+  remember(day) {
+    const key = day.key;
+    this.days.delete(key); this.days.set(key, day);
+    for (const candidate of [...this.days.keys()]) {
+      if (this.days.size <= TRACE_CACHE_DAYS) break;
+      if (candidate === key || this.dirty.has(candidate)) continue;
+      const entry = this.days.get(candidate);
+      if (entry?.rows?.some(row => this.liveEvents.has(row.id))) continue;
+      this.days.delete(candidate);
+    }
+    return day;
+  }
+  /** Drop a known row from every in-memory index so deleted days cannot be resurrected. */
+  forget(row) {
+    if (!row?.id) return;
+    this.erased.add(row.id);
+    for (const map of [this.contexts, this.pendingEvents, this.liveEvents, this.durableSeq]) map.delete(row.id);
+    for (const map of [this.pendingContent, this.contentCache]) for (const key of map.keys()) if (key.startsWith(row.id + ':')) map.delete(key);
+  }
+  /** Every stored day of one account; a corrupted index is offered for deletion, not hidden. */
+  traceDays(accountId) {
+    if (!this.enabled) return [];
+    const folder = this.local(this.accountFolder(accountId), false);
+    const dates = new Set(fs.existsSync(folder) ? fs.readdirSync(folder).filter(name => /^\d{4}-\d{2}-\d{2}$/.test(name)) : []);
+    for (const value of this.days.values()) if (value.accountId === accountId) dates.add(value.day);
+    return [...dates].sort().map(day => {
+      try { return { day, rows: this.day(accountId, day).rows }; }
+      catch (failure) {
+        if (!(failure instanceof ChannelError) || failure.code !== 'TRACE_INDEX_INVALID') throw failure;
+        return { day, rows: [], error: failure.message };
+      }
+    });
+  }
+  /** Delete one owned day directory (index, events and content) and forget it in memory. */
+  eraseDay(accountId, day, rows = []) {
+    const key = accountId + ':' + day, known = this.days.get(key)?.rows || [];
+    this.dirty.delete(key); this.days.delete(key); this.erasedDays.add(key);
+    for (const row of [...known, ...rows]) this.forget(row);
+    const directory = this.local(path.join(this.accountFolder(accountId), day), false);
+    if (fs.existsSync(directory)) removeManagedDirectory(this.root, directory);
+  }
+  /** Explicit owner deletion from the cleanup page; throws so the caller can report it. */
+  dropDay(accountId, day) {
+    if (!this.enabled) throw error('TRACE_UNAVAILABLE', '任务执行轨迹尚未启用');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) throw error('TRACE_DATE_INVALID', '执行日期不正确');
+    let rows = this.days.get(accountId + ':' + day)?.rows;
+    if (!rows) {
+      try { rows = this.day(accountId, day).rows; }
+      catch (failure) { if (failure?.code !== 'TRACE_INDEX_INVALID') throw failure; rows = []; }
+    }
+    this.eraseDay(accountId, day, rows);
+    return true;
+  }
+  /** Delete day directories older than the retention window; only this store's own days. */
+  sweep() {
+    if (!this.enabled || this.closed || !fs.existsSync(this.root)) return 0;
+    const cutoff = localDay(this.now() - (TRACE_RETENTION_DAYS - 1) * 86400000);
+    let removed = 0;
+    for (const account of fs.readdirSync(this.root, { withFileTypes: true })) {
+      if (!account.isDirectory() || !/^[a-f0-9]{32}$/.test(account.name)) continue;
+      const folder = this.local(path.join(this.root, account.name), false);
+      for (const name of fs.readdirSync(folder)) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(name) || name >= cutoff) continue;
+        const file = this.local(path.join(folder, name, 'index.json'), false);
+        let record; try { record = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { continue; }
+        // Only a day whose index proves this store's ownership may be removed; a
+        // corrupted or foreign index stays on disk for the owner to inspect.
+        if (record?.version !== 1 || record.ownerStoreId !== this.owner || record.day !== name || typeof record.accountId !== 'string' ||
+          !record.accountId || hash(record.accountId).slice(0, 32) !== account.name) continue;
+        const rows = [...(this.days.get(record.accountId + ':' + name)?.rows || []), ...(Array.isArray(record.rows) ? record.rows : [])];
+        if (rows.some(row => TRACE_ACTIVE.has(row?.state))) continue;
+        this.eraseDay(record.accountId, name, rows); removed++;
+      }
+    }
+    return removed;
+  }
+  prune() {
+    if (!this.enabled || this.closed) return;
+    try { if (this.sweep()) this.prunedAt = this.now(); this.retentionWarning = null; }
+    catch (failure) { this.retentionWarning = failure instanceof ChannelError ? failure.message : '过期执行轨迹未能清理，请检查数据目录与磁盘空间'; }
+  }
   mark(day) {
+    if (!this.days.has(day.key)) this.remember(day);
     this.dirty.add(day.key); this.revision++;
     if (!this.flushTimer) { this.flushTimer = setTimeout(() => { this.flushTimer = null; void this.flush(); }, 750); this.flushTimer.unref?.(); }
   }
@@ -231,6 +327,7 @@ export class ExecutionTraces {
     const indices = [];
     for (const key of [...this.dirty]) {
       this.dirty.delete(key); const day = this.days.get(key);
+      if (!day || this.erasedDays.has(key)) continue;
       indices.push({ day, rows: day.rows.map(row => ({ ...row })) });
     }
     let pending;
@@ -239,6 +336,7 @@ export class ExecutionTraces {
       let writeError;
       await eachConcurrent([...batches.values()], async entry => {
         const { context, events, content } = entry;
+        if (this.erased.has(context.row.id)) return;
         const directory = this.local(path.join(context.day.directory, context.row.id), false);
         try {
           await fs.promises.mkdir(directory, { recursive: true, mode: 0o700 });
@@ -259,6 +357,7 @@ export class ExecutionTraces {
         } catch (failure) { context.row.incomplete = true; writeError ??= failure; }
       });
       for (const { day, rows } of indices) {
+        if (this.erasedDays.has(day.key)) continue;
         const incompleteIds = new Set(day.rows.filter(row => row.incomplete).map(row => row.id));
         for (const row of rows) if (incompleteIds.has(row.id)) row.incomplete = true;
         const bytes = json({ version: 1, ownerStoreId: this.owner, accountId: day.accountId, day: day.day, rows });
@@ -293,7 +392,7 @@ export class ExecutionTraces {
     // The UI and the older callers spell this filter both ways.
     if (state === 'problem') state = 'problems';
     if (!this.enabled) return { items: [], total: 0, counts: {}, hidden: { skipped: 0 }, summary: { total: 0, active: 0, problems: 0, skipped: 0, averageMs: null },
-      warning: this.warning, startedAt: this.startedAt, enabled: false };
+      errors: [], warning: this.warning, startedAt: this.startedAt, enabled: false };
     if (!TRACE_TYPES.some(row => row[0] === type) || !['all', 'problems', ...Object.keys(TRACE_STATES)].includes(state) ||
       !TRACE_PRESETS.has(preset) ||
       typeof query !== 'string' || query.length > 200 || !Number.isInteger(offset) || offset < 0 || !Number.isInteger(limit) || limit < 1 || limit > 100)
@@ -313,8 +412,15 @@ export class ExecutionTraces {
     const directory = this.local(this.accountFolder(accountId), false);
     const dates = new Set(fs.existsSync(directory) ? fs.readdirSync(directory).filter(name => /^\d{4}-\d{2}-\d{2}$/.test(name)) : []);
     for (const day of this.days.values()) if (day.accountId === accountId) dates.add(day.day);
-    let rows = [...dates].filter(date => date >= dayOf(startAt) && date <= dayOf(endAt)).flatMap(date => this.day(accountId, date).rows)
-      .filter(row => row.createdAt >= startAt && row.createdAt <= endAt);
+    const errors = [];
+    let rows = [...dates].filter(date => date >= dayOf(startAt) && date <= dayOf(endAt)).flatMap(date => {
+      try { return this.day(accountId, date).rows; }
+      // One unreadable day must not hide every other day; the UI lists it as an error.
+      catch (failure) {
+        if (!(failure instanceof ChannelError) || failure.code !== 'TRACE_INDEX_INVALID') throw failure;
+        errors.push({ date, code: failure.code, message: failure.message }); return [];
+      }
+    }).filter(row => row.createdAt >= startAt && row.createdAt <= endAt);
     if (this.history) { const known = new Set(rows.map(row => row.sourceKey)); rows = [...rows, ...this.history(accountId, { from, to, startAt, endAt }).filter(row => !known.has(row.sourceKey))]; }
     const counts = Object.fromEntries(TRACE_TYPES.map(([id]) => [id, id === 'all' ? rows.length : rows.filter(row => row.type === id).length]));
     const normalized = query.trim().toLocaleLowerCase();
@@ -331,7 +437,7 @@ export class ExecutionTraces {
       summary: { total: visible.length, active: visible.filter(row => TRACE_ACTIVE.has(row.state)).length,
         problems: visible.filter(row => TRACE_PROBLEMS.has(row.state) || row.failedSteps > 0).length, skipped: skipped.length,
         averageMs: durations.length ? Math.round(durations.reduce((a, b) => a + b, 0) / durations.length) : null },
-      warning: this.warning, startedAt: this.startedAt, enabled: true, revision: this.revision };
+      errors, warning: this.warning, startedAt: this.startedAt, enabled: true, revision: this.revision };
   }
   context(accountId, id) {
     if (!validId(id)) throw error('TRACE_NOT_FOUND', '这次执行轨迹不存在');
@@ -377,7 +483,7 @@ export class ExecutionTraces {
       return 0;
     }
     await this.flush({ strict: true });
-    let count = 0;
+    let count = 0, inspected = 0;
     for (const accountId of new Set(scopes.map(scope => scope.accountId))) {
       const account = this.local(this.accountFolder(accountId), false), dates = new Set(
         fs.existsSync(account) ? fs.readdirSync(account).filter(name => /^\d{4}-\d{2}-\d{2}$/.test(name)) : []);
@@ -392,6 +498,10 @@ export class ExecutionTraces {
       for (const date of dates) {
         const day = this.day(accountId, date), removed = [];
         for (const row of day.rows) {
+          // Matching reads every trace payload, so a large store spends minutes in
+          // this loop. Yielding between batches keeps the window answering Windows
+          // ("未响应") while the owner keeps working.
+          if ((++inspected % 64) === 0) await new Promise(resolve => setImmediate(resolve));
           let matches = related(row);
           const directory = this.local(path.join(day.directory, row.id), false), events = path.join(directory, 'events.jsonl');
           if (!matches && fs.existsSync(events)) for (const line of fs.readFileSync(ownedPath(this.root, events), 'utf8').split('\n')) {
@@ -419,5 +529,5 @@ export class ExecutionTraces {
     await this.flush({ strict: true });
     return count;
   }
-  async close() { this.closed = true; await this.flush(); }
+  async close() { this.closed = true; clearInterval(this.pruneTimer); this.pruneTimer = null; await this.flush(); }
 }

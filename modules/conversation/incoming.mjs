@@ -248,13 +248,12 @@ export function receiveMessage(channel, message, accountId) {
 }
 
 export function observeManualReply(channel, message, accountId) {
-  if (
-    message.direction !== 'outgoing' ||
-    message.sender.id !== accountId ||
-    message.chatType !== 'group' ||
-    message.source !== 'longlink:NewSync'
-  )
-    return;
+  if (message.direction !== 'outgoing' || message.sender?.id !== accountId ||
+      !['private', 'group'].includes(message.chatType)) return;
+  // Local transport ACK echoes belong to their sending feature's receipt
+  // ledger. Only observed/manual messages enter here; do not pause chat or
+  // duplicate an Agent reply while its ACK is still being reconciled.
+  if (message.delivery === 'server-ack' || /^(?:longlink:SendMsg|longlink:UploadMsgImg|shortlink:SendEmoji|shortlink:SendAppMsg)$/u.test(message.source || '')) return;
   try {
     const status = channel.transport.status(),
       age = channel.now() - message.time * 1000;
@@ -267,23 +266,19 @@ export function observeManualReply(channel, message, accountId) {
     )
       return;
     const config = channel.store.conversationSettings(accountId, message.chatType, message.peerId);
-    if (
-      config.mode !== 'natural' ||
-      channel.store.data.records.some(
-        (record) =>
-          record.accountId === accountId &&
-          record.peerId === message.peerId &&
-          record.acknowledgedMessageIds?.includes(message.serverMessageId || message.id)
-      )
-    )
-      return;
+    if (channel.store.data.records.some(record => record.accountId === accountId &&
+      record.chatType === message.chatType && record.peerId === message.peerId &&
+      record.acknowledgedMessageIds?.includes(message.serverMessageId || message.id))) return;
     const key = identity([accountId, message.chatType, message.peerId, message.serverMessageId || message.id]);
     if (Object.hasOwn(channel.store.data.seen, key)) return;
-    const selector = { accountId, chatType: message.chatType, peerId: message.peerId },
+    const selector = { accountId, chatType: message.chatType, peerId: message.peerId };
+    let natural;
+    if (message.chatType === 'group' && config.mode === 'natural') {
       natural = channel.natural.onManual(selector, config);
-    channel.cancelNaturalAmbient(selector, NATURAL_REASONS.manual, { followups: true });
-    natural.pendingKey = null;
-    channel.store.remember(key, channel.now(), undefined, { accountId, message, natural });
+      channel.cancelNaturalAmbient(selector, NATURAL_REASONS.manual, { followups: true });
+      natural.pendingKey = null;
+    }
+    channel.store.remember(key, channel.now(), undefined, { accountId, message, ...(natural ? { natural } : {}) });
   } catch (error) {
     channel.fail(error);
   }

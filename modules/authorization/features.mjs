@@ -6,12 +6,19 @@ import { revokedMessageKeys, relatedRecord } from './records.mjs';
 import { stateBackupScopes, purgeStateBackups } from './backups.mjs';
 import { personAuthorized } from '../../shared/authorization.mjs';
 
+// `mentioned-…` is a local reference to a relative named in a chat message, never
+// a WeChat contact (see modules/memory/roles/references.mjs). Counting it as a peer
+// queued a revocation on every start; that purge read every trace file and froze the
+// main process for minutes, so the app looked dead on launch.
+const LOCAL_MENTION_ID = /^mentioned-[a-f0-9]{32}$/;
+
 /** Discover existing scopes without exposing unauthorised content to a model.
  * This also covers authorisations removed while the application was stopped. */
 export function storedObjectScopes(channel) {
   const scopes = new Map(), accounts = new Set(Object.keys(channel.store.data.accounts));
   const add = scope => {
     if (!scope?.accountId || !['private', 'group'].includes(scope.chatType) || !scope.peerId) return;
+    if (LOCAL_MENTION_ID.test(scope.peerId)) return;
     if (scope.peerId === scope.accountId || scope.peerId.endsWith('@chatroom') !== (scope.chatType === 'group')) return;
     accounts.add(scope.accountId); scopes.set(identity([scope.accountId, scope.chatType, scope.peerId]), {
       accountId: scope.accountId, chatType: scope.chatType, peerId: scope.peerId });
@@ -19,6 +26,11 @@ export function storedObjectScopes(channel) {
   const person = (accountId, peerId) => add({ accountId, chatType: 'private', peerId });
   for (const scope of [...stateBackupScopes(channel.store), ...Object.values(channel.store.data.conversations), ...Object.values(channel.memory.index.conversations),
     ...channel.imageMemory.storedScopes()]) add(scope);
+  for (const entry of channel.store.personaEntries?.() ?? []) {
+    if (entry.source !== 'distilled' || !entry.provenance || entry.disabled) continue;
+    person(entry.provenance.accountId, entry.provenance.personId);
+    for (const scope of entry.provenance.sourceScopes) add(scope);
+  }
   for (const task of channel.scheduler?.data.tasks || []) add(task);
   const automation = channel.momentsAutomation;
   for (const rule of Object.values(automation.likes.data.accounts)) for (const id of rule.settings.userIds) person(rule.accountId, id);
@@ -34,6 +46,9 @@ export function storedObjectScopes(channel) {
   for (const [accountId, record] of Object.entries(channel.library.data.accounts))
     for (const asset of record.assets) if (asset.sourceMessage) add({ ...asset.sourceMessage, accountId });
   for (const accountId of accounts) {
+    // Administrator settings are retained data too: a revoked admin may have no
+    // conversation archive, but still needs removal from the global allowlist.
+    for (const id of channel.store.config.section('remote')?.globalAdminIds ?? []) person(accountId, id);
     for (const scope of channel.store.roleCards.storedScopes(accountId)) person(accountId, scope.personId);
     for (const source of channel.store.roleCards.storedSourceScopes(accountId)) add(source);
     const files = channel.longMemory.paths(accountId);
@@ -119,6 +134,7 @@ function purgeConfiguration(channel, scopes) {
 }
 
 export async function purgeFeatureData(channel, scopes) {
+  channel.store.revokeDerivedPersonas?.(scopes);
   const keys = revokedMessageKeys(channel, scopes);
   purgeStateBackups(channel, scopes, keys);
   purgeTasks(channel, scopes, keys);

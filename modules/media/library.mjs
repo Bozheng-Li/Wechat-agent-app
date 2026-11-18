@@ -18,6 +18,13 @@ import { readAssetZip } from "./zip.mjs";
 export const SETTINGS = Object.freeze({ enabled: true, probability: 20, minGapMessages: 3 });
 export const STICKER_SETTINGS = Object.freeze({ captureIncoming: true, preferNative: true, autoDescribe: true });
 
+// An upload keeps one of the eight slots and one .part file until it finishes or
+// aborts. A client that never reaches either end (closed page, crash, dropped
+// connection) must not keep them forever, so the next beginUpload reaps entries
+// older than this budget; orphaned .part files are swept after a day.
+const UPLOAD_TIMEOUT_MS = 30 * 60 * 1000;
+const UPLOAD_PART_MAX_AGE_MS = 86400000;
+
 export const UPLOADED_PACK = 'user-uploads';
 
 export const assetPack = (asset) => asset.packId || UPLOADED_PACK;
@@ -631,6 +638,27 @@ export class MediaLibrary {
     }
     return { removed: targets.length, retainedFiles };
   }
+  /** Timed-out uploads release both their temporary file and their slot. */
+  reapUploads() {
+    const now = this.now();
+    for (const upload of [...this.uploads.values()]) {
+      let startedAt = upload.startedAt;
+      if (!Number.isFinite(startedAt))
+        try {
+          startedAt = fs.statSync(upload.file).mtimeMs;
+        } catch {
+          startedAt = NaN;
+        }
+      // An age that cannot be established is kept: a live upload is only ever
+      // cancelled here when its recorded start is provably past the budget.
+      if (!Number.isFinite(startedAt) || now - startedAt <= UPLOAD_TIMEOUT_MS) continue;
+      try {
+        this.assertLocal(upload.file, false);
+        fs.unlinkSync(upload.file);
+      } catch {}
+      this.uploads.delete(upload.id);
+    }
+  }
   beginUpload(id, input) {
     accountId(id);
     const name = plain(input?.name, '文件名', 1000, false),
@@ -638,6 +666,7 @@ export class MediaLibrary {
       size = input.size;
     if (!Number.isSafeInteger(size) || size < 1 || size > MEDIA_LIBRARY_LIMITS.uploadBytes)
       throw error('ASSET_TOO_LARGE', '单次上传最多 32 MiB');
+    this.reapUploads();
     if (this.uploads.size >= 8) throw error('ASSET_UPLOAD_BUSY', '同时上传的文件过多，请完成当前上传后再试');
     const uploadId = randomUUID(),
       directory = path.join(this.root, 'uploads');
@@ -647,7 +676,7 @@ export class MediaLibrary {
       if (/^[a-f0-9-]{36}\.part$/.test(entry)) {
         const file = path.join(directory, entry);
         this.assertLocal(file);
-        if (this.now() - fs.statSync(file).mtimeMs > 86400000) fs.unlinkSync(file);
+        if (this.now() - fs.statSync(file).mtimeMs > UPLOAD_PART_MAX_AGE_MS) fs.unlinkSync(file);
       }
     const file = path.join(directory, uploadId + '.part');
     fs.writeFileSync(file, Buffer.alloc(0), { flag: 'wx', mode: 0o600 });
@@ -713,20 +742,27 @@ export class MediaLibrary {
       while (this.completedUploads.size > 100) this.completedUploads.delete(this.completedUploads.keys().next().value);
       return clone(result);
     } finally {
-      this.abortUpload(id, uploadId);
+      // The import above may already be committed, so a cleanup failure must not
+      // turn a completed upload into a reported failure.
+      try { this.abortUpload(id, uploadId); } catch {}
     }
   }
   abortUpload(id, uploadId) {
     const upload = this.uploads.get(uploadId);
     if (!upload) return { cancelled: false };
     if (upload.accountId !== accountId(id)) throw error('ASSET_UPLOAD_MISSING', '上传不属于当前账号');
-    this.assertLocal(upload.file, false);
     try {
-      fs.unlinkSync(upload.file);
-    } catch (failure) {
-      if (failure.code !== 'ENOENT') throw error('ASSET_UPLOAD_INVALID', '上传已取消，临时文件暂未清理');
+      this.assertLocal(upload.file, false);
+      try {
+        fs.unlinkSync(upload.file);
+      } catch (failure) {
+        if (failure.code !== 'ENOENT') throw error('ASSET_UPLOAD_INVALID', '上传已取消，临时文件暂未清理');
+      }
+    } finally {
+      // The slot is released even when the temporary file cannot be removed;
+      // otherwise one unlink failure keeps it occupied for the whole process.
+      this.uploads.delete(uploadId);
     }
-    this.uploads.delete(uploadId);
     return { cancelled: true };
   }
   describe(id, assetIds, runner, signal, options) { return describeAssets(this, id, assetIds, runner, signal, options); }

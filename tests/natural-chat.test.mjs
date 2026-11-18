@@ -57,6 +57,32 @@ function fixture(t, options = {}) {
   return { root, store, channel, transport, runner, status, calls, sent, outputs, clock, config, message, receive, records, state, advance, gates };
 }
 
+test('split replies preserve globally indexed receipts when a later send partially succeeds', async t => {
+  const writes = [];
+  const transport = { status: () => ({ online: true, account: { ...owner } }), send: async params => {
+    writes.push(params);
+    if (writes.length === 1) return { delivery: 'server-ack', serverMessageIds: ['split-ack-1'],
+      deliveryParts: [{ index: 0, type: 'text', state: 'acknowledged', serverMessageId: 'split-ack-1' }] };
+    throw new ChannelError('SEND_UNKNOWN', 'partial', { delivery: 'partially-acknowledged',
+      acknowledgedMessageIds: ['split-ack-2'], deliveryParts: [
+        { index: 0, type: 'text', state: 'acknowledged', serverMessageId: 'split-ack-2' },
+        { index: 1, type: 'text', state: 'unknown' },
+      ] });
+  } };
+  const f = fixture(t, { transport });
+  f.runner.run = async () => ({ text: '第一条<SPLIT>第二条<SPLIT>不应发出的第三条' });
+  f.receive(f.message('@小胖 测试分条'));
+  await f.channel.whenIdle();
+  assert.equal(writes.length, 2);
+  const record = f.records()[0];
+  assert.deepEqual(record.acknowledgedMessageIds, ['split-ack-1', 'split-ack-2']);
+  assert.deepEqual(record.deliveryParts.map(part => part.index), [0, 1, 2, 3]);
+  assert.deepEqual(record.deliveryParts.map(part => part.state), ['acknowledged', 'acknowledged', 'unknown', 'not-sent']);
+  assert.equal(record.deliveryParts[3].planIndex, 2, 'unattempted final bubble stays explicitly not-sent');
+  assert.equal(record.deliveryParts[0].serverMessageId, 'split-ack-1');
+  assert.equal(record.deliveryParts[1].serverMessageId, 'split-ack-2');
+});
+
 test('natural settings validate defaults, all numeric boundaries and overnight hours without changing legacy modes', () => {
   assert.deepEqual(validateNaturalSettings(), emptyNaturalSettings());
   for (const value of [{ minMinutes: 0 }, { maxMinutes: 1441 }, { minMinutes: 60, maxMinutes: 30 }, { fixedMinutes: 1.5 },

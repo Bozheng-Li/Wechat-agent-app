@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { conversationKey, peerId, peerName, peerType } from "../../shared/conversations.mjs";
 import { MemoryOverview } from "./visuals.jsx";
 import { Button } from '../../components/button.jsx';
@@ -8,6 +8,133 @@ const stamp = (value) =>
   value ? new Date(value < 1e12 ? value * 1000 : value).toLocaleString('zh-CN', { hour12: false }) : '时间未记录';
 const replace = (document, range, value) =>
   document.markdown.slice(0, range.start) + value + document.markdown.slice(range.end);
+const senders = (entry) => [...new Set((entry.sources || []).map((source) => source.sender).filter(Boolean))];
+const findFact = (document, id) => {
+  for (const section of document?.sections || [])
+    for (const entry of section.facts || []) if (entry.id === id) return entry;
+  return null;
+};
+
+// The 3 s poll replaces the whole document (and every fact object) even when the
+// markdown is unchanged, so the row compares the values it actually renders
+// instead of object identity. That keeps the unvirtualized list from re-rendering
+// on every poll while still reacting to real edits.
+const sameFactEntry = (left, right) =>
+  left === right ||
+  (left.id === right.id &&
+    left.state === right.state &&
+    left.text === right.text &&
+    left.createdAt === right.createdAt &&
+    left.subjectId === right.subjectId &&
+    left.subjectName === right.subjectName &&
+    left.start === right.start &&
+    left.end === right.end &&
+    left.bodyRange?.start === right.bodyRange?.start &&
+    left.bodyRange?.end === right.bodyRange?.end &&
+    senders(left).join('\u0000') === senders(right).join('\u0000'));
+
+const sameFact = (previous, next) =>
+  previous.editingValue === next.editingValue &&
+  previous.removing === next.removing &&
+  previous.showActions === next.showActions &&
+  previous.busy === next.busy &&
+  previous.locked === next.locked &&
+  previous.sectionName === next.sectionName &&
+  previous.actions === next.actions &&
+  sameFactEntry(previous.entry, next.entry);
+
+// One long-term fact. Editing and removal are owned by the page: every button goes
+// through `actions`, which looks the fact up in the current document by id, so a
+// memoized row never edits a stale markdown range.
+const LongFact = memo(function LongFact({
+  entry,
+  sectionName,
+  editingValue,
+  removing,
+  showActions,
+  busy,
+  locked,
+  actions,
+}) {
+  return (
+    <article
+      className={'wa-long-fact' + (entry.state === 'superseded' ? ' is-old' : '')}
+      data-long-fact-id={entry.id}
+    >
+      <header className="wa-long-fact-meta">
+        <span>{entry.state === 'superseded' ? '已被后续更正' : '长期事实'}</span>
+        <time>{stamp(entry.createdAt)}</time>
+      </header>
+      {editingValue !== null ? (
+        <div className="wa-section-space">
+          <textarea
+            className="wa-textarea"
+            aria-label="编辑长期事实"
+            rows={4}
+            maxLength={4000}
+            value={editingValue}
+            disabled={busy}
+            onChange={(event) => actions.change(event.target.value)}
+          />
+          <div className="wa-long-tools">
+            <Button
+              primary
+              disabled={busy || !editingValue.trim()}
+              onClick={actions.saveEdit}
+            >
+              保存这条事实
+            </Button>
+            <Button disabled={busy} onClick={actions.cancelEdit}>
+              取消编辑
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <p className="wa-long-note">{entry.text}</p>
+      )}
+      <p className="wa-help">
+        对象：{entry.subjectId === 'group' ? '本群共同事项' : entry.subjectName || '原会话资料 · 人物未确认'}；
+        来源：{sectionName} ·{' '}
+        {senders(entry).join('、') || '会话成员'}
+        ；仅用于这个会话。
+      </p>
+      {showActions && (
+        <div className="wa-long-fact-actions">
+          <Button
+            disabled={busy || locked}
+            onClick={() => actions.edit(entry.id)}
+          >
+            编辑
+          </Button>
+          <Button
+            danger
+            disabled={busy || locked}
+            onClick={() => actions.remove(entry.id)}
+          >
+            删除这条
+          </Button>
+        </div>
+      )}
+      {removing && (
+        <div className="wa-note-box wa-section-space">
+          <p>删除后，不会从这条事实原有的消息来源自动补回。</p>
+          <div className="wa-long-tools">
+            <Button
+              danger
+              disabled={busy}
+              onClick={actions.saveRemove}
+            >
+              确认删除这条事实
+            </Button>
+            <Button disabled={busy} onClick={actions.cancelRemove}>
+              返回
+            </Button>
+          </div>
+        </div>
+      )}
+    </article>
+  );
+}, sameFact);
 
 /** Owner-facing editor; hidden Markdown markers are preserved by scoped edits. */
 export function LongTermMemoryPage({ rpc, status, rows = [] }) {
@@ -90,98 +217,59 @@ export function LongTermMemoryPage({ rpc, status, rows = [] }) {
     act('memory.global.edit', { accountId, markdown, revision: document.revision }, success);
   const target = rows.find((peer) => conversationKey(peer) === selected);
   const sections = (doc?.sections || []).filter((section) => !selected || conversationKey(section) === selected);
+  const latest = useRef(null);
+  latest.current = { doc, editing, remove, save };
+  // Every row action ends up here, so a memoized row only ever sends a fact id and
+  // the page resolves the current markdown ranges itself.
+  const actions = useMemo(() => ({
+    edit: (id) => {
+      const entry = findFact(latest.current.doc, id);
+      if (entry) setEditing({ id: entry.id, base: latest.current.doc, range: entry.bodyRange, value: entry.text });
+    },
+    remove: (id) => {
+      const entry = findFact(latest.current.doc, id);
+      if (entry)
+        setRemove({
+          id: entry.id,
+          base: latest.current.doc,
+          range: { start: entry.start, end: entry.end },
+          text: entry.text,
+        });
+    },
+    change: (value) => setEditing((previous) => (previous ? { ...previous, value } : previous)),
+    saveEdit: async () => {
+      const current = latest.current.editing;
+      if (!current) return;
+      if (
+        await latest.current.save(
+          current.base,
+          replace(current.base, current.range, '\n- ' + current.value.trim() + '\n'),
+          '长期事实已修改。'
+        )
+      )
+        setEditing(null);
+    },
+    cancelEdit: () => setEditing(null),
+    saveRemove: async () => {
+      const current = latest.current.remove;
+      if (!current) return;
+      if (await latest.current.save(current.base, replace(current.base, current.range, ''), '这条长期事实已删除。'))
+        setRemove(null);
+    },
+    cancelRemove: () => setRemove(null),
+  }), []);
   const fact = (entry, section) => (
-    <article
+    <LongFact
       key={entry.id}
-      className={'wa-long-fact' + (entry.state === 'superseded' ? ' is-old' : '')}
-      data-long-fact-id={entry.id}
-    >
-      <header className="wa-long-fact-meta">
-        <span>{entry.state === 'superseded' ? '已被后续更正' : '长期事实'}</span>
-        <time>{stamp(entry.createdAt)}</time>
-      </header>
-      {editing?.id === entry.id ? (
-        <div className="wa-section-space">
-          <textarea
-            className="wa-textarea"
-            aria-label="编辑长期事实"
-            rows={4}
-            maxLength={4000}
-            value={editing.value}
-            disabled={!!busy}
-            onChange={(event) => setEditing({ ...editing, value: event.target.value })}
-          />
-          <div className="wa-long-tools">
-            <Button
-              primary
-              disabled={!!busy || !editing.value.trim()}
-              onClick={async () => {
-                if (
-                  await save(
-                    editing.base,
-                    replace(editing.base, editing.range, '\n- ' + editing.value.trim() + '\n'),
-                    '长期事实已修改。'
-                  )
-                )
-                  setEditing(null);
-              }}
-            >
-              保存这条事实
-            </Button>
-            <Button disabled={!!busy} onClick={() => setEditing(null)}>
-              取消编辑
-            </Button>
-          </div>
-        </div>
-      ) : (
-        <p className="wa-long-note">{entry.text}</p>
-      )}
-      <p className="wa-help">
-        对象：{entry.subjectId === 'group' ? '本群共同事项' : entry.subjectName || '原会话资料 · 人物未确认'}；
-        来源：{section.name} ·{' '}
-        {[...new Set((entry.sources || []).map((source) => source.sender).filter(Boolean))].join('、') || '会话成员'}
-        ；仅用于这个会话。
-      </p>
-      {!editing && (
-        <div className="wa-long-fact-actions">
-          <Button
-            disabled={!!busy || dirty || !!rawDraft}
-            onClick={() => setEditing({ id: entry.id, base: doc, range: entry.bodyRange, value: entry.text })}
-          >
-            编辑
-          </Button>
-          <Button
-            danger
-            disabled={!!busy || dirty || !!rawDraft}
-            onClick={() =>
-              setRemove({ id: entry.id, base: doc, range: { start: entry.start, end: entry.end }, text: entry.text })
-            }
-          >
-            删除这条
-          </Button>
-        </div>
-      )}
-      {remove?.id === entry.id && (
-        <div className="wa-note-box wa-section-space">
-          <p>删除后，不会从这条事实原有的消息来源自动补回。</p>
-          <div className="wa-long-tools">
-            <Button
-              danger
-              disabled={!!busy}
-              onClick={async () => {
-                if (await save(remove.base, replace(remove.base, remove.range, ''), '这条长期事实已删除。'))
-                  setRemove(null);
-              }}
-            >
-              确认删除这条事实
-            </Button>
-            <Button disabled={!!busy} onClick={() => setRemove(null)}>
-              返回
-            </Button>
-          </div>
-        </div>
-      )}
-    </article>
+      entry={entry}
+      sectionName={section.name}
+      editingValue={editing && editing.id === entry.id ? editing.value : null}
+      removing={!!remove && remove.id === entry.id}
+      showActions={!editing}
+      busy={!!busy}
+      locked={dirty || !!rawDraft}
+      actions={actions}
+    />
   );
   return (
     <>

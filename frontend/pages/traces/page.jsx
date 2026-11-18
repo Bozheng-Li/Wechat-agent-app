@@ -104,8 +104,11 @@ export function ExecutionTracesPage({ rpc, status }) {
       } catch (failure) { if (!controller.signal.aborted) setError(failure.message); }
       finally { pending = false; if (!controller.signal.aborted) setLoading(false); }
     };
-    void read(); const timer = setInterval(() => { if (offset === 0) void read(); }, 5000);
-    return () => { controller.abort(); clearInterval(timer); };
+    void read();
+    // Only the first page polls: registering the interval unconditionally kept a
+    // timer waking up every 5 s while paged deeper, doing nothing.
+    const timer = offset === 0 ? setInterval(() => { void read(); }, 5000) : null;
+    return () => { controller.abort(); if (timer) clearInterval(timer); };
   }, [filters, offset, refresh]);
   const changeType = value => { setType(value); setSelected(null); setOffset(0); };
   const [, title] = TRACE_TYPES.find(row => row[0] === type) || TRACE_TYPES[0];

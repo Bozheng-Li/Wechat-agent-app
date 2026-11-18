@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { conversationEligible } from "../../shared/authorization.mjs";
 import { digest, scopeKey, checkedText, fail } from "../workbench/store.mjs";
 import { recordVersion, modes, recoveryStates } from "../workbench/helpers.mjs";
+import { splitChatReply } from '../../shared/chat-reply-split.mjs';
 
 export function findRecoveryRecord(workbench, scope, key) {
   const record = workbench.store.views.get(scopeKey(scope))?.records.find((record) => record.key === key);
@@ -191,11 +192,27 @@ export function deleteRecovery(workbench, input) {
   };
 }
 
+function recoveryPlan(original, kinds) {
+  if (!Array.isArray(original.replyPlan)) return null;
+  return original.replyPlan.filter(plan => kinds.includes(plan.type) &&
+    Array.isArray(original.deliveryParts) && original.deliveryParts.some(part => part.planIndex === plan.index) &&
+    original.deliveryParts.filter(part => part.planIndex === plan.index).every(part => part.state === 'not-sent'));
+}
+
 export function recoveryAllowed(workbench, original, mode, acknowledgedMissing = false) {
   if (original.toolProgress) fail('RECOVERY_NOT_ALLOWED', '开始提示只适用于当时的操作，不补发过期提示。');
   if (!['failed', 'unknown', 'partial', 'cancelled'].includes(original.state))
     fail('RECOVERY_ALREADY_SENT', '这条回复不需要恢复，已确认的消息不会重发');
-  const kinds = mode === 'image' ? ['image'] : mode === 'text' || mode === 'regenerate' ? ['text'] : ['text', 'image'];
+  const kinds = mode === 'image' ? ['image', 'face'] : mode === 'text' || mode === 'regenerate' ? ['text'] : ['text', 'image', 'face'];
+  const plan = recoveryPlan(original, kinds);
+  if (plan) {
+    if (!plan.length) {
+      if (original.deliveryParts?.some(part => kinds.includes(part.type) && part.state === 'unknown'))
+        fail('RECOVERY_AMBIGUOUS', '所选气泡没有明确未发项；未知回执可能已送达，不能重发，请在微信核对后手动处理');
+      fail('RECOVERY_ALREADY_SENT', '所选气泡已有回执或没有明确未发项，不能重复发送');
+    }
+    return kinds;
+  }
   if ((original.state === 'partial' || original.acknowledgedMessageIds?.length) && !original.deliveryParts?.length)
     fail(
       'RECOVERY_AMBIGUOUS',
@@ -218,9 +235,14 @@ export async function prepareRecovery(workbench, input, signal) {
     fail('RECOVERY_DELETED', '这条恢复记录已删除，未创建新的草稿');
   if (input.revision !== recordVersion(original) || !modes.includes(input.mode))
     fail('RECOVERY_CHANGED', '记录已变化或恢复方式无效，请重新读取');
-  workbench.recoveryAllowed(original, input.mode, input.confirmUnreceived === true);
-  let text = input.mode === 'image' ? '' : original.reply || original.replyDraft || '';
-  const asset = ['retry', 'image'].includes(input.mode) ? original.replyMedia : null;
+  if (workbench.recoveryBusy(scope, original.key)) fail('RECOVERY_BUSY', '原回复仍在发送或等待回执，请结束后再恢复');
+  const kinds = workbench.recoveryAllowed(original, input.mode, input.confirmUnreceived === true);
+  let plan = recoveryPlan(original, kinds);
+  const partIndexes = plan?.map(part => part.index);
+  let text = plan ? plan.filter(part => part.type === 'text').map(part => part.text).join('<SPLIT>')
+    : input.mode === 'image' ? '' : original.reply || original.replyDraft || '';
+  const asset = plan ? plan.find(part => ['image', 'face'].includes(part.type))?.media ?? null
+    : ['retry', 'image'].includes(input.mode) ? original.replyMedia : null;
   if (input.mode === 'regenerate') {
     const result = await workbench.runner.run({
       text: checkedText(original.question, promptText("recovery/templates.json", "service-text-1"), 20000),
@@ -232,6 +254,8 @@ export async function prepareRecovery(workbench, input, signal) {
       signal,
     });
     text = result.text;
+    // Regeneration is a new draft, but retains the not-sent source identity.
+    if (plan) plan = splitChatReply(text).map(text => ({ index: plan[0].index, type: 'text', text }));
   }
   signal.throwIfAborted();
   workbench.scope(scope);
@@ -249,6 +273,7 @@ export async function prepareRecovery(workbench, input, signal) {
     mode: input.mode,
     text,
     asset: asset ? { ...asset } : null,
+    ...(plan ? { plan, partIndexes } : {}),
     confirmUnreceived: input.confirmUnreceived === true,
     state: 'draft',
     createdAt: workbench.now(),
@@ -287,13 +312,18 @@ export async function submitRecoveryDraft(workbench, input, signal) {
     fail('RECOVERY_DELETED', '原恢复记录已删除，未继续发送');
   if (draft.originalRevision !== recordVersion(original)) fail('RECOVERY_CHANGED', '原消息状态已改变，请重新准备');
   const kinds = workbench.recoveryAllowed(original, draft.mode, draft.confirmUnreceived);
+  const plan = recoveryPlan(original, kinds);
+  if (draft.partIndexes && (!plan || draft.partIndexes.some(index => !plan.some(part => part.index === index))))
+    fail('RECOVERY_CHANGED', '未发气泡状态已变化，请重新准备');
   const related =
     workbench.store.views.get(scopeKey(scope))?.records.filter((record) => record.recoveryOf === original.key) || [];
   if (
     related.some(
       (record) =>
         (!['failed', 'cancelled'].includes(record.state) || (record.sendAttempted && record.delivery !== 'rejected')) &&
-        (!record.recoveryKinds || record.recoveryKinds.some((kind) => kinds.includes(kind)))
+        (draft.partIndexes && record.recoveryPartIndexes
+          ? record.recoveryPartIndexes.some(index => draft.partIndexes.includes(index))
+          : !record.recoveryKinds || record.recoveryKinds.some(kind => kinds.includes(kind)))
     )
   )
     fail('RECOVERY_ALREADY_ATTEMPTED', '相同内容已有恢复操作或结果待核对，不能重复发送');
@@ -315,7 +345,7 @@ export async function submitRecoveryDraft(workbench, input, signal) {
         content: draft.text,
         kind: 'message',
         targets: [],
-        recovery: { sourceKey: original.key, kinds, asset: draft.asset },
+        recovery: { sourceKey: original.key, kinds, asset: draft.asset, ...(draft.plan ? { plan: draft.plan, partIndexes: draft.partIndexes } : {}) },
       },
       signal
     );

@@ -199,6 +199,10 @@ export class SearchService {
         throw new ChannelError('WEB_SEARCH_SERVICE_FAILED', 'DeepSeek 搜索暂时无法连接，请稍后重试。');
       }
       if (!response.ok) {
+        // Release the undici body before mapping the status, exactly like the
+        // Tavily branch: an unread error body keeps its socket parked until GC,
+        // and repeated failures (bad key, rate limit) would pile them up.
+        try { await response.body?.cancel(); } catch {}
         const status = response.status;
         if (status === 401 || status === 403)
           throw new ChannelError('WEB_SEARCH_AUTH_FAILED', `DeepSeek 搜索接口返回 HTTP ${status}，请核对 DeepSeek API Key 与访问权限。`);

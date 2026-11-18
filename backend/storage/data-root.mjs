@@ -21,6 +21,14 @@ const VOLATILE = new Set([
 ]);
 
 const MAX_BYTES = 8 * 1024 * 1024 * 1024;
+/**
+ * The size of a data root is only shown on the settings page, which asks for the
+ * current and the plugin root in one synchronous call. Bound the walk so opening
+ * that page can never sit behind a large tree: what was counted so far is reported
+ * as a lower bound instead of an error.
+ */
+const SCAN_LIMIT = { entries: 20000, milliseconds: 50 };
+const TIME_CHECK_INTERVAL = 256;
 
 function readJSON(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return undefined; }
@@ -50,25 +58,35 @@ export function accountsOf(directory) {
   return accounts && typeof accounts === 'object' && !Array.isArray(accounts) ? Object.keys(accounts) : [];
 }
 
+/**
+ * `bytes` is what was counted; `truncated` says the walk stopped at the budget, so
+ * the real size is at least that much. Unreadable entries are skipped, never fatal.
+ */
 function directorySize(directory) {
-  let total = 0;
+  const startedAt = Date.now();
+  let total = 0,
+    inspected = 0;
   const stack = [directory];
   while (stack.length) {
     const current = stack.pop();
     let entries;
     try { entries = fs.readdirSync(current, { withFileTypes: true }); } catch { continue; }
     for (const entry of entries) {
+      inspected++;
+      if (inspected > SCAN_LIMIT.entries ||
+          (inspected % TIME_CHECK_INTERVAL === 0 && Date.now() - startedAt > SCAN_LIMIT.milliseconds))
+        return { bytes: total, truncated: true };
       if (VOLATILE.has(entry.name)) continue;
       const target = path.join(current, entry.name);
       if (entry.isDirectory()) stack.push(target);
       else if (entry.isSymbolicLink()) continue;
       else {
         try { total += fs.statSync(target).size; } catch { /* Skip unreadable entries. */ }
-        if (total > MAX_BYTES) return total;
+        if (total > MAX_BYTES) return { bytes: total, truncated: true };
       }
     }
   }
-  return total;
+  return { bytes: total, truncated: false };
 }
 
 /** True when `child` is `parent` itself or lives anywhere below it. */
@@ -118,13 +136,16 @@ export function describeDataRoot(root, { current } = {}) {
   const config = path.join(resolved, 'config.yaml');
   const state = path.join(resolved, 'storage/state/channel.json');
   const locked = lockHolder(resolved);
+  // One bounded walk: `bytes` is a lower bound whenever `truncated` is set.
+  const size = exists ? directorySize(resolved) : { bytes: 0, truncated: false };
   return {
     root: resolved,
     exists,
     current: current ? path.resolve(current) === resolved : false,
     hasData: fs.existsSync(config) || fs.existsSync(state),
     writable: exists ? (() => { try { fs.accessSync(resolved, fs.constants.W_OK); return true; } catch { return false; } })() : false,
-    bytes: exists ? directorySize(resolved) : 0,
+    bytes: size.bytes,
+    truncated: size.truncated,
     storeId: configStoreId(resolved),
     accounts: accountsOf(resolved),
     locked,

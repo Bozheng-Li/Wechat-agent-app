@@ -4,6 +4,11 @@ import { promptText } from '../../prompts/loader.mjs';
 import { RECEIVED_FILE_LIMITS, receivedFileMetadata } from '../../shared/received-files.mjs';
 import { readDocx } from '../files/docx.mjs';
 
+// Deliberately not registered with the model: the shipped worker rejects the
+// `files` RPC with FILE_FEATURE_DISABLED (backend/wechat/worker.mjs), the reply
+// prompt states that attachment reading is disabled, and no production caller
+// supplies `saveInput`. Do not add it to the tool list until the channel is
+// re-enabled end to end; this module is kept for tests and for that future pass.
 const hash = content => createHash('sha256').update(content).digest('hex');
 const invalid = () => { throw new ChannelError('FILE_QUERY_INVALID', '省略 messageId 和 name 默认选择本轮消息前最近收到的附件；也可指定原消息编号或完整文件名，不接受任意路径或网址'); };
 function validate(args, canSave) {

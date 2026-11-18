@@ -3,12 +3,14 @@ import { ChannelError } from '../../shared/contracts.mjs';
 import { availableModel, visionSelection } from './models.mjs';
 import { ModelClient } from './model-client.mjs';
 import { publicText } from '../../backend/wechat/ai/public-output.ts';
-import { INTERNAL_OUTPUT_MODES, buildWechatPrompt, messageWithHistory, memoryContext, identityData, scheduledData } from '../../prompts/reply/compose.mjs';
+import { INTERNAL_OUTPUT_MODES, buildWechatPrompt, buildPersonaPassPrompt, messageWithHistory, memoryContext, identityData, scheduledData } from '../../prompts/reply/compose.mjs';
+import { PERSONA_PLANNING_PROMPT, PERSONA_PLAN_RETRY_NOTE, PERSONA_NATURAL_PLANNING_PROMPT, PERSONA_NATURAL_PLAN_RETRY_NOTE, parsePersonaOutput, personaPassInput, personaModeOf } from './persona-pass.mjs';
 import { emptyResponseRetryNote } from '../../prompts/reply/delivery.mjs';
 import { registerModelTools } from '../tools/registry.mjs';
 import { planProgressiveTools } from '../tools/progressive.mjs';
 import { measureModelRequest, numericUsage } from './request-metrics.mjs';
 import { currentTrace, traceStep } from '../traces/context.mjs';
+import { conversationInputMessages } from './conversation-input.mjs';
 
 export function localTools(definitions, { assertAllowed, progressive, text }) {
   const inventory = new Map(), guards = [], sections = [];
@@ -41,11 +43,42 @@ function parseCalls(values, inventory, seen) {
   });
 }
 
+async function runPersonaExpressionPass({ client, selected, connection, runtime, signal, assertAllowed, group, persona, prompt, adminNotes, identityMarkdown,
+  text, plan, history, speaker, account, selectedReply, memory, toolResults, sessionId, mode, personaMode, requestMetrics, trace, onRequestMetrics }) {
+  signal.throwIfAborted(); assertAllowed();
+  const messages = [
+    { role: 'system', content: buildPersonaPassPrompt({ group, persona, prompt, adminNotes, identityMarkdown, requestText: text }) },
+    { role: 'user', content: personaPassInput(text, plan, { history, speaker, account, selectedReply, memory, toolResults }) },
+  ];
+  const metric = { sessionId, strategy: runtime.modelConfig?.promptStrategy ?? 'legacy', mode, personaMode,
+    personaPass: 'expression', startedAt: Date.now(), ...measureModelRequest({ messages, tools: [] }) };
+  const step = trace?.store.startStep(trace, { kind: 'model', title: '人设表达 · 第二阶段', input: { messages, tools: [] },
+    metadata: { sessionId, provider: selected.provider, model: selected.model, mode, personaPass: 'expression', ...metric } });
+  let result;
+  try {
+    result = await client.complete({ selection: selected, messages, tools: [], maxTokens: runtime.modelConfig?.maxTokens,
+      temperature: runtime.modelConfig?.temperature, signal, connection });
+    metric.usage = numericUsage(result.usage); metric.finishReason = result.finishReason;
+    step?.end({ state: result.finishReason === 'stop' ? 'completed' : 'failed',
+      output: { content: result.message.content, usage: metric.usage }, metadata: { usage: metric.usage, finishReason: result.finishReason } });
+  } catch (error) {
+    step?.end({ error, state: signal.aborted ? 'cancelled' : 'failed' });
+    throw error;
+  } finally {
+    metric.elapsedMs = Date.now() - metric.startedAt;
+    requestMetrics.push(metric); onRequestMetrics?.(structuredClone(requestMetrics));
+  }
+  signal.throwIfAborted(); assertAllowed();
+  if (result.finishReason !== 'stop' || result.message.tool_calls?.length)
+    throw new ChannelError('MODEL_INCOMPLETE', '人设表达阶段未正常完成，未发送回复');
+  return publicText(result.message.content ?? '');
+}
+
 /** Independent tool loop. Conversation history remains in the existing scoped memory stores. */
 export async function runLocalAgent(runner, {
   text, group, prompt, persona, adminNotes, sessionId, signal = new AbortController().signal, onSession,
   mode = 'default', history = [], memory, images = [], tools = [], systemOverride, speaker, account,
-  allowEmptyReply = false, executionSnapshot, selectReplyText, naturalDecision, scheduledTask,
+  allowEmptyReply = false, executionSnapshot, selectReplyText, naturalDecision, scheduledTask, personaModeOverride, selectedReply,
   onRequestMetrics, onBeforeTool, assertAllowed = () => {},
 }) {
   signal.throwIfAborted(); assertAllowed();
@@ -59,6 +92,8 @@ export async function runLocalAgent(runner, {
   const internal = INTERNAL_OUTPUT_MODES.has(mode);
   const material = ['moments-materials', 'moments-publish'].includes(mode);
   const person = mode === 'natural' && naturalDecision || ['moments-reply', 'moments-interaction'].includes(mode);
+  const personaMode = !internal && !systemOverride ? personaModeOf(runtime.persona, personaModeOverride) : null;
+  const highPrecision = personaMode === 'high-precision';
   const definitions = material
     ? tools.filter(tool => ['wechat_moments_material_search', 'wechat_moments_material_download', 'wechat_moments_material_generate'].includes(tool.name))
     : person ? tools.filter(tool => tool.name === 'wechat_role_card') : internal || systemOverride ? []
@@ -68,23 +103,34 @@ export async function runLocalAgent(runner, {
   const system = buildWechatPrompt({ group, mode, persona: runtime.persona, prompt, adminNotes, identityMarkdown: runtime.identityMarkdown,
     modelConfig: runtime.modelConfig, promptStrategy: strategy, capabilities: registered.visible,
     searchAvailable: definitions.some(tool => tool.name === 'wechat_web_search'), memoryAvailable: definitions.some(tool => tool.name === 'wechat_memory'),
-    systemOverride, naturalDecision, requestText: text, history, speaker }) + '\n\n' + registered.sections.join('\n');
-  const inputText = [identityData(speaker, account, runtime.persona), scheduledData(scheduledTask, mode),
+    systemOverride, naturalDecision, naturalOutputInstructions: highPrecision && naturalDecision ? PERSONA_NATURAL_PLANNING_PROMPT : undefined,
+    requestText: text, history, speaker, includePersona: !highPrecision }) + '\n\n' + registered.sections.join('\n') +
+    (highPrecision && !naturalDecision ? '\n\n' + PERSONA_PLANNING_PROMPT : '');
+  const inputText = [identityData(speaker, account, highPrecision ? null : runtime.persona), scheduledData(scheduledTask, mode),
     memoryContext(memory), messageWithHistory(text, history, mode, undefined)].filter(Boolean).join('\n\n');
-  const messages = [{ role: 'system', content: system }, { role: 'user', content: images.length
-    ? [{ type: 'text', text: inputText }, ...images.map(imageContent)] : inputText }];
+  const dialogue = !internal && !systemOverride
+    ? conversationInputMessages({ reference: [scheduledData(scheduledTask, mode), memoryContext(memory)].filter(Boolean).join('\n\n'),
+        history, speaker, currentIdentity: identityData(speaker, account, highPrecision ? null : runtime.persona),
+        current: messageWithHistory(text, [], mode, undefined) })
+    : [{ role: 'user', content: inputText }];
+  if (images.length) {
+    const last = dialogue.at(-1);
+    last.content = [{ type: 'text', text: last.content }, ...images.map(imageContent)];
+  }
+  const messages = [{ role: 'system', content: system }, ...dialogue];
   const client = runner.client ??= new ModelClient(runner.ctx.llm, { fetchImpl: runner.ctx.fetch });
   // An edited endpoint or key applies to the next run, never midway through a tool loop.
   const connection = client.providers ? await client.providers.selectionRequest(selected) : undefined;
-  const seen = new Set(); let emptyResponseRetries = 0, toolUsed = false;
+  const seen = new Set(), toolResults = []; let emptyResponseRetries = 0, planRetries = 0, toolUsed = false;
   await onSession?.(id);
   for (let round = 0; round < 64; round++) {
     signal.throwIfAborted(); assertAllowed();
     const activeTools = [...registered.inventory.values()];
-    const metric = { sessionId: id, strategy, mode, startedAt: Date.now(), ...measureModelRequest({ messages, tools: activeTools }) };
-    const step = trace?.store.startStep(trace, { kind: 'model', title: '模型生成 · ' + mode,
+    const metric = { sessionId: id, strategy, mode, personaMode,
+      personaPass: highPrecision ? 'planning' : 'single', startedAt: Date.now(), ...measureModelRequest({ messages, tools: activeTools }) };
+    const step = trace?.store.startStep(trace, { kind: 'model', title: highPrecision ? '人设规划 · 第一阶段' : '模型生成 · ' + mode,
       input: { messages, tools: activeTools.map(({ name, description, parameters }) => ({ name, description, parameters })) },
-      metadata: { sessionId: id, provider: selected.provider, model: selected.model, mode, ...metric } });
+      metadata: { sessionId: id, provider: selected.provider, model: selected.model, mode, personaMode, personaPass: highPrecision ? 'planning' : 'single', ...metric } });
     let result;
     try {
       result = await client.complete({ selection: selected, messages, tools: activeTools,
@@ -113,22 +159,62 @@ export async function runLocalAgent(runner, {
         const value = await traceStep(execution.name, () => registered.inventory.get(execution.name).execute(call.args, execution),
           { context: trace, kind: 'tool', input: call.args, metadata: { sessionId: id, tool: execution.name, callId: call.id } });
         signal.throwIfAborted(); assertAllowed();
-        messages.push({ role: 'tool', tool_call_id: call.id, content: typeof value === 'string' ? value : JSON.stringify(value ?? null) });
+        const content = typeof value === 'string' ? value : JSON.stringify(value ?? null);
+        messages.push({ role: 'tool', tool_call_id: call.id, content });
+        toolResults.push({ name: call.function.name, callId: call.id, content });
       }
       continue;
     }
     if (result.finishReason !== 'stop') throw new ChannelError('MODEL_INCOMPLETE', '模型未返回最终正文');
     const raw = result.message.content ?? '';
-    let reply = publicText(typeof selectReplyText === 'function' ? selectReplyText(raw) : raw);
     const allowEmpty = typeof allowEmptyReply === 'function' ? allowEmptyReply() : allowEmptyReply;
+    const media = typeof selectedReply === 'function' ? selectedReply() : null;
+    let reply, personaApplied = false;
+    if (highPrecision) {
+      const decisionReply = naturalDecision && typeof selectReplyText === 'function' ? publicText(selectReplyText(raw)) : null;
+      if (media && !media.text?.trim() || naturalDecision && !decisionReply) {
+        reply = '';
+      } else {
+        if (!raw.trim() && !media) {
+          if (!toolUsed && !emptyResponseRetries) {
+            emptyResponseRetries++; messages.push({ role: 'user', content: emptyResponseRetryNote() }); continue;
+          }
+          throw new ChannelError('MODEL_EMPTY', '信息整理阶段没有返回内容，未发送回复');
+        }
+        // Every reply-producing path carries the same fact/constraint packet.
+        // Media selection and natural decisions no longer replace it with a
+        // caption/hint that silently drops role-card facts and uncertainty.
+        let plan;
+        try {
+          plan = parsePersonaOutput(raw, { natural: !!naturalDecision });
+        } catch (failure) {
+          if (failure.code !== 'PERSONA_PLAN_INVALID' || planRetries)
+            throw new ChannelError('PERSONA_PLAN_INVALID', '信息整理阶段没有给出可用的要点，未发送回复；可重试本条');
+          planRetries++;
+          messages.push({ role: 'user', content: naturalDecision ? PERSONA_NATURAL_PLAN_RETRY_NOTE : PERSONA_PLAN_RETRY_NOTE });
+          continue;
+        }
+        const expression = await runPersonaExpressionPass({ client, selected, connection, runtime, signal, assertAllowed, group,
+          persona: runtime.persona, prompt, adminNotes, identityMarkdown: runtime.identityMarkdown,
+          text, plan, history, speaker, account, selectedReply: media, memory, toolResults,
+          sessionId: id, mode, personaMode, requestMetrics, trace, onRequestMetrics });
+        if (!expression) throw new ChannelError('MODEL_EMPTY', '人设表达阶段未返回正文，未发送内部资料包');
+        reply = media || naturalDecision ? expression : publicText(typeof selectReplyText === 'function' ? selectReplyText(expression) : expression);
+        personaApplied = true;
+      }
+    } else {
+      reply = publicText(typeof selectReplyText === 'function' ? selectReplyText(raw) : raw);
+    }
     if (!reply && !allowEmpty) {
-      if (!toolUsed && !emptyResponseRetries) { emptyResponseRetries++; messages.push({ role: 'user', content: emptyResponseRetryNote() }); continue; }
+      if (!highPrecision && !toolUsed && !emptyResponseRetries) { emptyResponseRetries++; messages.push({ role: 'user', content: emptyResponseRetryNote() }); continue; }
       throw new ChannelError('MODEL_EMPTY', '模型没有返回可用的最终正文，未发送微信回复');
     }
     let replyStyleWarning;
     if (!internal && (!systemOverride || mode === 'confirmation') && reply)
       reply = await runner.polishReply(reply, text, signal, runtime.persona, { prompt, runtime, onStyleWarning: note => { replyStyleWarning = note; } });
-    return { text: reply, sessionId: id, requestMetrics, ...(emptyResponseRetries ? { emptyResponseRetries } : {}), ...(replyStyleWarning ? { replyStyleWarning } : {}) };
+    return { text: reply, sessionId: id, personaMode, personaPasses: personaApplied ? 2 : 1, personaApplied,
+      requestMetrics,
+      ...(emptyResponseRetries ? { emptyResponseRetries } : {}), ...(replyStyleWarning ? { replyStyleWarning } : {}) };
   }
   throw new ChannelError('MODEL_TOOL_LIMIT', '本轮工具调用已达到上限，已停止继续执行，请查看执行记录');
 }
