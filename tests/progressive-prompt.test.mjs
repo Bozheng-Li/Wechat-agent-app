@@ -40,7 +40,9 @@ test('a bare greeting keeps the persona but trims the example library to the gre
   assert(greeting.includes('语气示例：对方「早。」，回应「早。」'));
   assert(!greeting.includes('第四版。第五版还来不来'));
   assert(greeting.includes(personaFromPreset().background));
-  assert(!greeting.includes('当前时间：'));
+  assert(greeting.includes('当前时间：'));
+  assert(greeting.includes('不机械报时或纠正'));
+  assert(greeting.includes('当前本地时段'));
   assert(ordinary.includes('第四版。第五版还来不来'));
   assert(ordinary.includes('时区 Asia/Shanghai'));
 });

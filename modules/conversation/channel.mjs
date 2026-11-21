@@ -8,7 +8,7 @@ import { processReply } from "./reply.mjs";
 import { scheduleMemoryMaintenance } from "./memory-maintenance.mjs";
 import { checkMemoryPressure } from "./memory-maintenance.mjs";
 import { maintainConversationMemory } from "./memory-maintenance.mjs";
-import { ChannelError, schedulesEnabled, publicError } from "../../shared/contracts.mjs";
+import { ChannelError, schedulesEnabled, publicError, participationMode } from "../../shared/contracts.mjs";
 import { identity } from "../../backend/storage/keys.mjs";
 import { ConversationMemory } from "../memory/conversation/store.mjs";
 
@@ -189,11 +189,11 @@ export class WechatChannel {
     )
       throw new ChannelError('AUTH_CHANGED', '该会话的回复模式已变更，旧任务未继续回复');
     if (
-      item.config.mode === 'natural' &&
+      participationMode(item.config.mode) &&
       !item.scheduled &&
       naturalConfigKey(current) !== naturalConfigKey(item.config)
     )
-      throw new ChannelError('AUTH_CHANGED', '自然陪聊设置已变更，旧任务未继续回复');
+      throw new ChannelError('AUTH_CHANGED', '群聊参与设置已变更，旧任务未继续回复');
     if (item.naturalDecision) {
       const state = this.store.naturalState(item.record.accountId, item.record.chatType, item.record.peerId);
       if (item.ambient) {

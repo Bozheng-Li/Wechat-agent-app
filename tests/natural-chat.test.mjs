@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { stickerPng } from './fixtures/stickers.mjs';
 import { ChannelError, StateStore, WechatChannel, emptyNaturalSettings, validateNaturalSettings,
   parseNaturalDecision, withinNaturalHours, emptyNaturalState, validateNaturalState, createPluginService, rpcHandler } from '../lib/testing.js';
 
@@ -32,7 +33,7 @@ function fixture(t, options = {}) {
   const channel = new WechatChannel({ store, transport, runner, now: () => clock.value, random: () => 0, ...options });
   const config = (peer = room, overrides = {}) => {
     const value = { mode: 'natural', intervalMode: 'fixed', fixedMessages: 3, minMessages: 3, maxMessages: 3, recordsPath: '',
-      ...overrides, natural: { ...emptyNaturalSettings(), intervalMode: 'fixed', fixedMinutes: 5, minGapMinutes: 1,
+      ...overrides, natural: { ...emptyNaturalSettings(), timerEnabled: true, followupEnabled: true, intervalMode: 'fixed', fixedMinutes: 5, minGapMinutes: 1,
         activeHours: false, followupSeconds: 0, ...overrides.natural } };
     return store.setConversationSettings(owner.id, 'group', peer, value);
   };
@@ -81,6 +82,27 @@ test('split replies preserve globally indexed receipts when a later send partial
   assert.equal(record.deliveryParts[3].planIndex, 2, 'unattempted final bubble stays explicitly not-sent');
   assert.equal(record.deliveryParts[0].serverMessageId, 'split-ack-1');
   assert.equal(record.deliveryParts[1].serverMessageId, 'split-ack-2');
+});
+
+for (const action of ['reply', 'skip']) test(`natural participation can select a sticker, but only reply delivers it: ${action}`, async t => {
+  const f = fixture(t);
+  f.channel.library.import(owner.id, { name: '合成点头.png', kind: 'sticker', data: stickerPng().toString('base64') });
+  const asset = f.channel.library.list(owner.id).items[0];
+  f.channel.library.edit(owner.id, asset.id, { description: '点头表示收到', usage: '感谢或赞同' });
+  f.runner.run = async input => {
+    const choose = input.tools.find(tool => tool.name === 'wechat_sticker_send');
+    assert(choose, 'natural branch must receive the sticker tool');
+    assert(!input.tools.some(tool => ['wechat_generate_image', 'wechat_reply_media', 'wechat_task'].includes(tool.name)));
+    const selected = JSON.parse(await choose.execute({ assetId: asset.id, caption: null }, { signal: input.signal }));
+    assert.equal(selected.ok, true);
+    const raw = action === 'reply' ? '{"action":"reply","text":""}' : '{"action":"skip","reason":"closed","text":""}';
+    return { text: input.selectReplyText(raw) };
+  };
+  for (const text of ['谢谢啦', '辛苦你了', '确实帮了大忙']) f.receive(f.message(text));
+  await f.channel.whenIdle();
+  assert.equal(f.sent.length, action === 'reply' ? 1 : 0);
+  assert.equal(f.records()[0].state, action === 'reply' ? 'sent' : 'skipped');
+  if (action === 'reply') assert.deepEqual(f.sent[0].message.map(part => part.type), ['face']);
 });
 
 test('natural settings validate defaults, all numeric boundaries and overnight hours without changing legacy modes', () => {
@@ -372,23 +394,29 @@ test('character changes, task cancellation and reply toggles preserve uncertain 
   assert.equal(f.calls.length, 1); assert.equal(f.records().find(record => record.key === blockedKey).state, 'unknown');
 });
 
-test('count checks blocked by the shared cooldown do not repeatedly postpone the timer', async t => {
+test('new human messages restart the silence clock even when their count checks are blocked by cooldown', async t => {
   const f = fixture(t); f.config(room, { fixedMessages: 1, minMessages: 1, maxMessages: 1, natural: { minGapMinutes: 10 } });
   f.receive(f.message('小胖，先看看营地')); await f.channel.whenIdle();
   const due = f.state().nextCheckAt;
   f.clock.value += 60000; f.receive(f.message('普通新话题一')); await f.channel.whenIdle();
-  assert.equal(f.state().nextCheckAt, due);
+  assert.equal(f.state().nextCheckAt, due + 60000);
+  assert.equal(f.state().nextCheckAt, f.clock.value + 5 * 60000);
   f.clock.value += 60000; f.receive(f.message('普通新话题二')); await f.channel.whenIdle();
-  assert.equal(f.state().nextCheckAt, due); assert.equal(f.calls.length, 1);
+  assert.equal(f.state().nextCheckAt, due + 120000); assert.equal(f.calls.length, 1);
+  assert.equal(f.state().lastIncomingAt, f.clock.value);
   assert.match(f.records()[0].reason, /刚刚已经发言/);
+  const raw = f.store.history(owner.id, 'group', room, 100).filter(row => row.direction === 'incoming').map(row => row.text);
+  assert(raw.includes('普通新话题一') && raw.includes('普通新话题二'), 'coalesced cooldown diagnostics must not drop real incoming history');
+  assert.equal(f.state().humanRevision, 3);
 });
 
-test('an unrelated followup skip neither increases cold-opening backoff nor shifts the independent timer', async t => {
+test('an unrelated followup resets silence from the human message, but its skip adds no opening backoff', async t => {
   const f = fixture(t); f.config(room, { fixedMessages: 100, minMessages: 100, maxMessages: 100, natural: { followupSeconds: 120 } });
   f.receive(f.message('小胖，怎么选营地')); await f.channel.whenIdle();
   const due = f.state().nextCheckAt; f.clock.value += 10000;
   f.outputs.push('{"action":"skip","reason":"no_followup","text":""}');
   f.receive(f.message('接下来跟小林聊电影')); await f.channel.whenIdle();
-  assert.equal(f.calls[1].naturalDecision.trigger, 'followup'); assert.equal(f.state().nextCheckAt, due);
+  assert.equal(f.calls[1].naturalDecision.trigger, 'followup'); assert.equal(f.state().nextCheckAt, due + 10000);
+  assert.equal(f.state().nextCheckAt, f.state().lastIncomingAt + 5 * 60000);
   assert.equal(f.state().backoff, 0); assert.equal(f.sent.length, 1);
 });

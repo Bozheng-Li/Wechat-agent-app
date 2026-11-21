@@ -196,12 +196,9 @@ for (const current of [
   view({ changes: [change('旧称呼', '', now + 100, ownerEvidence(now - 1000)), change('', '新称呼', now + 1100, ownerEvidence(now + 100))] }),
   view({ tombstone: true, changes: [change('旧称呼', '新称呼', now + 1100, ownerEvidence(now - 1000))] }),
   view({ revokedAt: now + 1000, changes: [change('旧称呼', '新称呼', now + 1100, ownerEvidence(now - 1000))] }),
-  view({ changes: [{ field: 'addressAs', before: '旧称呼', after: '新称呼', at: now + 1100, origin: 'agent' }] }),
-  view({ changes: [change('旧称呼', '不匹配值', now + 1100, ownerEvidence(now - 1000))] }),
-  view({ changes: [change('旧称呼', '新称呼', now + 1100, agentEvidence('旧称呼', now + 500))] }),
   view({ changes: [change('旧称呼', '新称呼', now + 1100, { ...ownerEvidence(now - 1000), sources: [{ senderId: 'foreign-person' }] })] }),
 ]) {
-  test('deletion, tombstone, revocation, incomplete history or invalid evidence cannot resurrect a field: ' + JSON.stringify(current.changes), () => {
+  test('deletion, tombstone, revocation or foreign evidence cannot resurrect a field: ' + JSON.stringify(current.changes), () => {
     assert.equal(readableRoleCard(current, now).card.addressAs, '');
   });
 }
@@ -213,7 +210,46 @@ test('empty conflicted cards still expose the conflict without reviving a value'
 test('future quotations cannot hide behind an older evidence timestamp', () => {
   const prior = { ...ownerEvidence(now - 1000), sources: [{ senderId: 'alice', time: now + 1000, quote: '未来引文' }] };
   const result = readableRoleCard(view({ changes: [change('旧称呼', '新称呼', now + 1100, prior)] }), now);
-  assert.equal(result.card.addressAs, ''); assert.deepEqual(result.evidence, {});
+  assert.equal(result.card.addressAs, '新称呼');
+  assert.equal(result.timing.addressAs.status, 'after-request');
+  assert(!JSON.stringify(result.evidence).includes('未来引文'), 'do not borrow historical proof for the current value');
+});
+for (const legacy of [false, true]) test('a late first background write keeps a fact sourced before receipt; legacy=' + legacy, () => {
+  const source = { ...agentEvidence('新称呼', now - 1000), updatedAt: now + 1100 };
+  if (legacy) delete source.sourceAt;
+  const current = view({ evidence: { addressAs: source }, changes: [change('', '新称呼', now + 1100, null)] });
+  const result = readableRoleCard(current, now);
+  assert.equal(result.card.addressAs, '新称呼'); assert.equal(result.found, true);
+  assert.deepEqual(result.evidence.addressAs, source);
+  assert.equal(result.timing.addressAs.status, 'background-update');
+  assert.equal(result.timing.addressAs.sourceAt, now - 1000);
+  assert.equal(result.timing.addressAs.updatedAt, now + 1100);
+});
+for (const changes of [
+  [{ field: 'addressAs', before: '旧称呼', after: '新称呼', at: now + 1100, origin: 'agent' }],
+  [change('旧称呼', '不匹配值', now + 1100, ownerEvidence(now - 1000))],
+]) test('incomplete history preserves the current value with an explicit reception-time limitation: ' + JSON.stringify(changes), () => {
+  const result = readableRoleCard(view({ changes }), now);
+  assert.equal(result.card.addressAs, '新称呼'); assert.equal(result.found, true);
+  assert.equal(result.timing.addressAs.historyUnavailable, true);
+  assert.equal(result.timing.addressAs.status, 'after-request');
+  assert.match(result.timing.addressAs.note, /无法还原接收时版本/u);
+  assert.match(result.timing.addressAs.note, /不能当作接收请求时已知/u);
+  assert.equal(result.evidence.addressAs.sources[0].quote, '叫我新称呼');
+});
+test('a known later source with no receive-time version is visible but labelled after-request', () => {
+  for (const changes of [[], [change('', '新称呼', now + 1100, null)],
+    [change('旧称呼', '新称呼', now + 1100, agentEvidence('旧称呼', now + 500))]]) {
+    const result = readableRoleCard(view({ changes }), now);
+    assert.equal(result.card.addressAs, '新称呼');
+    assert.equal(result.timing.addressAs.status, 'after-request');
+    assert.equal(result.timing.addressAs.sourceAt, now + 1000);
+  }
+});
+test('unknown time is described rather than silently erasing the current card', () => {
+  const result = readableRoleCard(view({ evidence: {}, updatedAt: null }), now);
+  assert.equal(result.card.addressAs, '新称呼');
+  assert.equal(result.timing.addressAs.status, 'unknown-time');
 });
 test('role-card scope is preserved during historical replay', () => {
   assert.throws(() => readableRoleCard(view({ scope: { ...scope, personId: 'other' } }), now), { code: 'ROLE_CARD_SCOPE' });
@@ -253,4 +289,41 @@ test('tool reads and automatic context use the same receive-time card projection
   assert.equal(result.card.addressAs, '旧称呼'); assert(!JSON.stringify(result.evidence).includes('新称呼'));
   channel.authorized.delete('alice');
   await assert.rejects(tool.execute({ action: 'read' }), { code: 'ROLE_CARD_PERSON_UNKNOWN' });
+});
+test('current fallback timing follows fields/query projections without exposing unrequested quotations', async () => {
+  const current = view({ card: { ...emptyRoleCard(), addressAs: '新称呼', preferences: '喜欢红茶', dislikes: '不吃香菜' },
+    evidence: { addressAs: agentEvidence('新称呼', now + 1000), preferences: agentEvidence('偏好原文', now + 1000),
+      dislikes: agentEvidence('忌口原文', now + 1000) },
+    changes: [{ field: 'addressAs', before: '旧称呼', after: '新称呼', at: now + 1100 }] });
+  const channel = channelWith([current]), bounded = { ...scope, senderId: 'alice', requestedAt: now };
+  const tool = personRoleCardTool(channel, bounded);
+  const brief = JSON.parse(await tool.execute({ action: 'read', fields: ['preferences'] }));
+  assert.deepEqual(Object.keys(brief.card), ['preferences']);
+  assert.deepEqual(Object.keys(brief.timing), ['preferences']);
+  assert.equal(brief.timing.preferences.status, 'after-request');
+  assert.equal(brief.evidence.preferences.sources, undefined);
+  assert(!JSON.stringify(brief).includes('原文'));
+  const expanded = JSON.parse(await tool.execute({ action: 'read', fields: ['preferences'], includeEvidence: true }));
+  assert.equal(expanded.evidence.preferences.sources[0].quote, '叫我偏好原文');
+  assert(!JSON.stringify(expanded).includes('忌口原文'));
+  const queried = JSON.parse(await tool.execute({ action: 'read', query: '红茶', includeEvidence: true }));
+  assert.equal(queried.card.dislikes, undefined); assert.equal(queried.timing.dislikes, undefined);
+  assert(!JSON.stringify(queried).includes('忌口原文'));
+  const context = personRoleContext(channel, bounded, { text: '称呼', maxChars: 4000 });
+  const row = JSON.parse(context.split('\n')[1]);
+  assert.equal(row.card.addressAs, '新称呼');
+  assert.equal(row.timing.addressAs.historyUnavailable, true);
+  assert.match(row.timing.addressAs.note, /请求后更新/u);
+  assert(!context.includes('叫我新称呼'), 'automatic context does not expose raw quotes');
+});
+for (const source of [
+  { senderId: 'foreign-person', time: now - 1000 },
+  { senderId: 'alice', accountId: 'foreign-owner', time: now - 1000 },
+  { senderId: 'alice', time: now - 1000, deleted: true },
+  { senderId: 'alice', time: now - 1000, tombstone: true },
+]) test('late writes never bypass source ownership or explicit deletion: ' + JSON.stringify(source), () => {
+  const current = view({ evidence: { addressAs: { origin: 'agent', sourceAt: now - 1000, updatedAt: now + 1000, sources: [source] } },
+    changes: [change('', '新称呼', now + 1100, null)] });
+  const result = readableRoleCard(current, now);
+  assert.equal(result.card.addressAs, ''); assert.deepEqual(result.timing, {});
 });

@@ -20,7 +20,9 @@ function fixture(t) {
   store.rememberConversationNames(owner, { groups: [{ id: room, name: '产品讨论组' }, { id: other, name: '产品讨论组' }] });
   let now = Date.now(), sequence = 0;
   const calls = [], sent = [], state = { online: true, account: { id: owner, nickname: '测试微信名' } };
-  const runner = { run: async input => { calls.push(input); return { text: '好，就按这个来。', sessionId: 'fixture-session-' + calls.length }; },
+  const runner = { run: async input => { calls.push(input);
+    const text = input.naturalDecision ? input.selectReplyText('{"action":"reply","text":"好，就按这个来。"}') : '好，就按这个来。';
+    return { text, sessionId: 'fixture-session-' + calls.length }; },
     summarize: async () => '阿禾喜欢猫，群里约定周五讨论产品。' };
   const transport = { status: () => structuredClone(state), send: async input => { sent.push(input); return { delivery: 'server-ack', serverMessageIds: ['fixture-ack-' + sent.length] }; } };
   transport.call = async (operation, input) => { assert.equal(operation, 'members'); return { accountId: input.accountId, peerId: input.peerId, members: [{ id: 'alice', name: '阿禾' }, { id: 'bob', name: '阿青' }] }; };
@@ -304,13 +306,13 @@ test('natural-reply defaults precede the persona and mechanically worded chat re
   const answerText = '按聊天里能确定的：阿禾就是刚才问问题的那位。';
   const prompts = [], messages = [], answers = [answerText];
   const ctx = { agentDefaultModel: { currentSelection: () => ({ provider: 'fixture', model: 'chat' }) },
-    agents: { create: async options => {
-      options.setup({ tools: { restrict() {}, guard() {}, register() {} }, systemPrompt: { suppressRuntimeContext() {}, section: value => { if (value.name === 'wechat-agent') prompts.push(value.text); } }, on() {} });
-      const answer = answers.shift();
-      return { agent: { session: { seq: 0, snapshotEvents: () => [{ type: 'assistant/message', data: { turn: 0, message: { content: [{ type: 'text', text: answer }] } } }, { type: 'turn/end', data: { turn: 0, reason: { kind: 'completed' } } }] },
-        followup: value => messages.push(value), whenIdle: async () => {}, cancel() {} }, dispose: async () => {} };
-    } } };
-  const result = await new DshAgentRunner(ctx, () => null, () => ({ persona: { name: '阿衡', prompt: '每次都写一份正式报告' } })).run({ text: '阿禾是谁', memory: '阿禾刚才问过一个问题。', signal: new AbortController().signal });
+    llm: { listProviders: () => [{ id: 'fixture' }], listModels: async () => [{ id: 'chat' }] } };
+  const runner = new DshAgentRunner(ctx, () => null, () => ({ persona: { name: '阿衡', prompt: '每次都写一份正式报告' } }));
+  runner.client = { complete: async input => {
+    messages.push(input.messages); prompts.push(input.messages[0].content);
+    return { message: { content: answers.shift() }, finishReason: 'stop' };
+  } };
+  const result = await runner.run({ text: '阿禾是谁', memory: '阿禾刚才问过一个问题。', signal: new AbortController().signal });
   assert.equal(result.text, answerText); assert.equal(messages.length, 1);
   assert.equal(result.replyStyleWarning, REPLY_STYLE_REVIEW_NOTE);
   assert.equal(prompts[0].split(NATURAL_REPLY_RULES).length, 2); assert(prompts[0].indexOf(NATURAL_REPLY_RULES) < prompts[0].indexOf('每次都写一份正式报告'));

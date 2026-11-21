@@ -14,6 +14,7 @@ import { error, accountId, decodeBase64, plain, normalizeKind } from "./validati
 import { inspectAssetImage } from "./image-format.mjs";
 import { prepareStickerImage } from './sticker-image.mjs';
 import { readAssetZip } from "./zip.mjs";
+import { selectStickerCandidates } from './sticker-candidates.mjs';
 
 export const SETTINGS = Object.freeze({ enabled: true, probability: 20, minGapMessages: 3 });
 export const STICKER_SETTINGS = Object.freeze({ captureIncoming: true, preferNative: true, autoDescribe: true });
@@ -312,6 +313,11 @@ export class MediaLibrary {
       path: this.folder(id),
       limits: MEDIA_LIBRARY_LIMITS,
     };
+  }
+  replyStickerCandidates(id, options = {}) {
+    const record = this.account(id);
+    if (!record.settings.enabled) return { candidates: [], eligibleCount: 0, relevantCount: 0 };
+    return selectStickerCandidates(record.assets.filter(asset => this.assetEnabled(record, asset)), options);
   }
   search(id, query = '', { kind, limit = 12 } = {}) {
     if (!this.account(id).settings.enabled) return [];

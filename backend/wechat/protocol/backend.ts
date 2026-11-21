@@ -442,7 +442,7 @@ export class ProtocolBackend implements Backend {
       throw new BridgeError('ERR_MOMENTS_ACCOUNT_CHANGED', '读取图片期间微信连接变化，未返回旧连接图片');
     return result;
   }
-  async readMomentsAudience(signal: AbortSignal) {
+  async readMomentsAudience(signal: AbortSignal, contactIds?: string[]) {
     const account = this.session.value, transport = this.transport;
     const identity = account && ['uin', 'wxid', 'token', 'body_key', 's08'].map(key => (account as any)[key]);
     const check = () => {
@@ -454,7 +454,7 @@ export class ProtocolBackend implements Backend {
     check();
     const reader = new MomentsAudienceReader((account, cmd, route, makeBody, requestSignal) => this.momentsAudienceReader.request(account, cmd, route, makeBody,
       AbortSignal.any([requestSignal, AbortSignal.timeout(this.options.requestTimeoutMs)])));
-    return reader.read(account!, signal, check);
+    return reader.read(account!, signal, check, contactIds);
   }
   async readMomentsPublication(raw: unknown, _scopeKey: string, signal: AbortSignal) {
     const account = this.session.value, transport = this.transport;

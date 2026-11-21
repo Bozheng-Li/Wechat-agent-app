@@ -7,7 +7,7 @@ import { DigestsPage } from "./pages/digests/page.jsx";
 import { peerId, peerType, splitLines } from "./shared/conversations.mjs";
 import { same, personaDraft, modelDraft, storageDraft, configDraft, configPayload, remoteDraft } from "./shared/drafts.mjs";
 import { AdministratorSettings } from './pages/settings/administrators-page.jsx';
-import { call, withTimeout } from "./shared/rpc.mjs";
+import { call, withTimeout, memoryRpcTimeoutMs } from "./shared/rpc.mjs";
 import { PageHead } from "./components/page-ui.jsx";
 import { Overview } from "./pages/overview/page.jsx";
 import { Authorization } from "./pages/conversations/authorization-page.jsx";
@@ -285,8 +285,8 @@ export function PanelContent({ connection, catalog, state, update }) {
         onSelectPersona={(id) =>
           action('persona.select', { id }, { area: 'persona', force: ['persona'], text: '已切换人设，之后的回复使用新的人设。' })
         }
-        onCreatePersona={({ persona, name, draftToken, accountId, senderId, source = 'distilled' }) =>
-          action('persona.create', { persona, name, draftToken, accountId, senderId, source: source === 'manual' ? 'manual' : 'distilled' },
+        onCreatePersona={({ persona, name, source = 'distilled' }) =>
+          action('persona.create', { persona, name, source: source === 'manual' ? 'manual' : 'distilled' },
             { area: 'persona', force: ['persona'], text: '新人设已保存并选用，之后的回复使用它。' })
         }
         onDeletePersona={(id) =>
@@ -381,9 +381,7 @@ export function PanelContent({ connection, catalog, state, update }) {
             payload,
             withTimeout(
               signal,
-              ['memory.compress', 'memory.retryImages', 'memory.global.extract', 'memory.images.import'].includes(endpoint)
-                ? 300000
-                : 30000
+              memoryRpcTimeoutMs(endpoint)
             )
           )
         }

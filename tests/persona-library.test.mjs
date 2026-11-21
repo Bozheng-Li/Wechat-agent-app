@@ -57,19 +57,20 @@ test('creating, switching and deleting personas keeps one active and survives re
   assert.equal(reloaded.persona().prompt, '甲正文');
 });
 
-test('legacy distilled entries without provenance are quarantined without deleting manual entries', t => {
+test('legacy distilled entries remain immediately usable without provenance or forced copying', t => {
   const directory = root(t), store = new StateStore(directory);
   store.setPersona({ name: '甲', aliases: [], prompt: '人工正文' });
   const manual = store.personaEntries()[0];
   store._writePersonas([manual, { id: 'old', name: '旧提炼', source: 'distilled', createdAt: 0,
     persona: { name: '乙', aliases: [], prompt: '无法归属的旧正文' } }], 'old');
   assert.equal(store.personasView().items.length, 2);
-  assert.equal(store.personasView().items.find(entry => entry.id === 'old').disabled, true);
-  assert.equal(store.persona().prompt, '人工正文');
-  assert.throws(() => store.selectPersona('old'), { code: 'PERSONA_SOURCE_REVOKED' });
+  assert.equal(store.personasView().items.find(entry => entry.id === 'old').disabled, undefined);
+  assert.equal(store.persona().prompt, '无法归属的旧正文');
+  store.selectPersona('old');
   const reloaded = new StateStore(directory);
   assert.equal(reloaded.personaEntries().find(entry => entry.id === 'old').persona.prompt, '无法归属的旧正文');
-  assert.equal(reloaded.persona().prompt, '人工正文');
+  assert.equal(reloaded.persona().prompt, '无法归属的旧正文');
+  reloaded.selectPersona('default'); assert.equal(reloaded.persona().prompt, '人工正文');
 });
 
 test('editing saves into the active entry only', t => {
@@ -106,7 +107,7 @@ const fakeStore = peers => ({
 const rowsFor = (senderId, senderName, count, offset = 0) => Array.from({ length: count }, (_, index) => ({
   senderId, senderName, direction: 'incoming', text: ['好', '行', '一般般'][index % 3], time: offset + index + 1 }));
 
-test('candidates pool the same person across conversations and skip thin ones', () => {
+test('candidates pool the same person across conversations and also allow small samples', () => {
   const peers = [{ accountId: 'a', chatType: 'group', peerId: 'g1', name: '一群' },
     { accountId: 'a', chatType: 'group', peerId: 'g2', name: '二群' }];
   const store = fakeStore(peers);
@@ -116,23 +117,23 @@ test('candidates pool the same person across conversations and skip thin ones', 
   const first = list.find(row => row.senderId === 'p1');
   assert.equal(first.count, 24, 'samples from both groups count toward the same person');
   assert.equal(first.chats.length, 2);
-  assert(!list.some(row => row.senderId === 'p2'), 'thin senders are not offered');
-  assert(!list.some(row => row.senderId === 'p3'));
+  assert(list.some(row => row.senderId === 'p2'));
+  assert(list.some(row => row.senderId === 'p3'));
 });
 
-test('distillation needs enough samples and never copies the source wording', () => {
+test('distillation gives actual samples to the model instead of generating a statistical persona locally', () => {
   const peers = [{ accountId: 'a', chatType: 'private', peerId: 'p1' }];
   const store = fakeStore(peers);
   const thin = memoryFor({ p1: people.filter(row => row.senderId === 'p1') });
-  assert.throws(() => distillPersona({ store, memory: thin, accountId: 'a', senderId: 'p1' }),
-    { code: 'PERSONA_SAMPLE_SMALL' });
+  assert.equal(distillPersona({ store, memory: thin, accountId: 'a', senderId: 'p1' }).samples.length, 3);
 
   const many = { p1: rowsFor('p1', '甲', 40) };
   const draft = distillPersona({ store, memory: memoryFor(many), accountId: 'a', senderId: 'p1' });
   assert.equal(draft.persona.name, '小胖', 'the assistant keeps its own name');
-  assert.match(draft.persona.prompt, /说话方式（统计模板）/);
-  assert.equal(draft.samples.length, 40, 'safe real snippets are retained for the later one-call model summary');
-  assert.equal(draft.provenance.personId, 'p1');
+  assert.equal(draft.persona.prompt, '', 'only the model should fill the persona body');
+  assert.equal(draft.samples.length, 40, 'real snippets are retained for the model summary');
+  assert.equal(draft.sampling.chats, 1);
+  assert.equal(draft.draftToken, undefined);
   assert.match(draft.suggestedName, /甲/);
   assert.doesNotMatch(draft.persona.prompt, /一般般/, 'habits are described, not quoted');
 });

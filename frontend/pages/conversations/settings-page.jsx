@@ -1,5 +1,6 @@
 import { validateNaturalSettings } from "../../../shared/contracts.mjs";
 import { initials, peerName, peerType } from "../../shared/conversations.mjs";
+import { groupReplyModes } from "../../shared/labels.mjs";
 import { naturalPayload } from "../../shared/drafts.mjs";
 import { Glyph } from "../../components/glyph.jsx";
 import { Button } from "../../components/button.jsx";
@@ -89,16 +90,7 @@ export function ConversationSettings({
               <fieldset className="wa-field wa-mode-fieldset">
                 <legend className="wa-field-label">回复模式</legend>
                 <div className="wa-radio-list" role="radiogroup" aria-label="群聊回复模式">
-                  {[
-                    ['default', '默认回复', '群内 @ 当前微信账号，或以 /agent 开头提问时回复。'],
-                    ['nickname', '昵称唤醒', '在默认回复基础上，增加 Agent 名字与昵称唤醒。'],
-                    ['participate', '主动参与', '保留 @、/agent 和昵称的立即回应，再按消息条数主动加入聊天。'],
-                    [
-                      'natural',
-                      '自然陪聊',
-                      '保留全部唤醒与数量设置，按时间和话题择机发言，能接后续，也会在无人回应时退让。',
-                    ],
-                  ].map(([value, label, description]) => (
+                  {groupReplyModes.map(([value, label, description]) => (
                     <label key={value} className="wa-mode-option">
                       <input
                         type="radio"
@@ -124,27 +116,33 @@ export function ConversationSettings({
                   </p>
                 </div>
               )}
+              {peer.config?.mode === 'participate' && draft.mode === 'natural' && (
+                <p className="wa-note-box" data-testid="participation-migration">
+                  当前仍使用旧版按消息参与。保存后转换为统一参与设置，保留已存条数和时间参数，开始应用已保存的活跃时段与发言间隔（可在“时间设置”调整）。
+                  冷场开口与连续接话默认关闭；只有勾选并保存才会获得这些机会。
+                </p>
+              )}
               {draft.mode === 'natural' && (
                 <NaturalChatSettings
                   draft={draft.natural}
                   blocked={blocked}
                   onChange={(natural) => onChange({ ...draft, natural })}
-                  status={peer.config?.mode === 'natural' ? peer.naturalStatus : null}
+                  status={['participate', 'natural'].includes(peer.config?.mode) ? peer.naturalStatus : null}
                   error={naturalError}
                   onResume={onResumeNatural}
                 />
               )}
-              {['participate', 'natural'].includes(draft.mode) && (
+              {draft.mode === 'natural' && draft.natural.messageEnabled && (
                 <div className="wa-note-box">
                   <p>
                     <strong>每个群独立计数</strong>
                   </p>
                   <p>
                     普通新消息按条数累计。有人直接点名时立即回应，并重新开始主动参与计数。
-                    {draft.mode === 'natural' ? '达到条数后判断是否适合接话，与时间机会合并。' : ''}
+                    达到条数只提供判断机会，不保证发言；与已开启的冷场机会合并。
                   </p>
                   <Field
-                    label={draft.mode === 'natural' ? '按条数检查接话' : '按条数主动参与'}
+                    label="新消息参与频次"
                     help={
                       draft.mode === 'natural'
                         ? '与时间检查共用一次参与判断和发言冷却；同时达到条件时合并，不额外发送两条。'
@@ -203,7 +201,7 @@ export function ConversationSettings({
                         />
                       </>
                     )}
-                    <span>{draft.mode === 'natural' ? '条消息判断一次' : '条消息参与一次'}</span>
+                    <span>条消息判断一次</span>
                   </div>
                   <p className="wa-help">
                     均可设置为 1–100 的整数。
@@ -218,6 +216,7 @@ export function ConversationSettings({
           ) : (
             <p className="wa-help">直接处理这个授权联系人的消息，使用此会话自己的记忆。</p>
           )}
+          <p className="wa-help">所有聊天回复均可按语境自主选用表情包，不是参与群聊专属；不按概率强制使用，判断不参与时也不会发送已选表情。</p>
           <div className="wa-subsection wa-conversation-permissions">
             <h2>会话管理员与远程查询</h2>
             <label className="wa-check-label"><input id="wa-remote-enabled" type="checkbox" checked={draft.remoteEnabled}

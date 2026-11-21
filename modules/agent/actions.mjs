@@ -1,7 +1,5 @@
 import { ChannelError, validateGlobalPersona, validateModelConfig } from "../../shared/contracts.mjs";
 import { selectModel, visionSelection } from "./models.mjs";
-import { savePersonaDraft, assertDistillSources } from './style-distill.mjs';
-import { assertStylePrivacy } from './style-summary.mjs';
 
 export const endpoints = ['search.credentials', 'identity.save', 'model.select', 'model.configure', 'persona.save',
   'persona.create', 'persona.select', 'persona.delete'];
@@ -50,14 +48,9 @@ export async function agentMutation(
     }
     case 'persona.create': {
       const persona = validateGlobalPersona(payload.persona);
-      const distilled = payload.source === 'distilled' || !!payload.draftToken;
       await paused('正在保存新人设，旧任务已取消', () => {
         assertLive(signal);
-        if (distilled) {
-          currentAccount(payload);
-          savePersonaDraft(store, { ...payload, persona }, provenance =>
-            store.createPersona({ persona, name: payload.name, source: 'distilled', provenance }));
-        } else store.createPersona({ persona, name: payload.name, source: 'manual' });
+        store.createPersona({ persona, name: payload.name, source: payload.source === 'distilled' ? 'distilled' : 'manual' });
         store.resetSessions();
       });
       break;
@@ -83,20 +76,13 @@ export async function agentMutation(
       const persona = validateGlobalPersona(payload.persona);
       const activeId = store.activePersonaId();
       if (payload.id && payload.id !== activeId) throw new ChannelError('PERSONA_CHANGED', '当前人设已切换，请重新载入后保存。');
-      const entry = store.personaEntries().find(row => row.id === activeId);
-      const checkDerived = () => {
-        if (store.activePersonaId() !== activeId) throw new ChannelError('PERSONA_CHANGED', '当前人设或来源授权已变化，请重新载入。');
-        if (entry?.source === 'distilled') {
-          currentAccount({ accountId: entry.provenance?.accountId });
-          const source = assertDistillSources(store, entry.provenance);
-          assertStylePrivacy(persona, { phrases: source.phrases });
-        }
+      const checkCurrent = () => {
+        if (store.activePersonaId() !== activeId) throw new ChannelError('PERSONA_CHANGED', '当前人设已切换，请重新载入后保存。');
       };
-      checkDerived();
       if (!activeId || JSON.stringify(persona) !== JSON.stringify(store.persona()))
         await paused('正在应用人设，旧任务已取消', () => {
           assertLive(signal);
-          checkDerived();
+          checkCurrent();
           store.setPersona(persona);
           store.resetSessions();
         });

@@ -23,9 +23,9 @@ import { TRACE_ENDPOINTS, traceQuery } from '../../modules/traces/api.mjs';
 import { listTimeSettings } from '../../modules/settings/time.mjs';
 import { timeSettings, preserveTimeValues } from '../../shared/time-settings.mjs';
 import { filledRoleCardFields } from '../../shared/role-card.mjs';
-import { assertConversationAuthorized, conversationAuthorized } from '../../shared/authorization.mjs';
+import { assertConversationAuthorized, conversationAuthorized, personAuthorized } from '../../shared/authorization.mjs';
 import { previewPersonaChat } from '../../modules/agent/persona-chat.mjs';
-import { distillCandidates, distillPersona, issuePersonaDraft } from '../../modules/agent/style-distill.mjs';
+import { distillCandidates, distillPersona } from '../../modules/agent/style-distill.mjs';
 import { summarizeStyle } from '../../modules/agent/style-summary.mjs';
 import { authorizationEpoch, assertAuthorizationEpoch } from '../../shared/authorization.mjs';
 import { timeLimitMs } from '../../shared/time-settings.mjs';
@@ -272,23 +272,15 @@ export function createPluginService({
           assertAuthorizationEpoch(store, account.id, epoch);
         };
         const pending = (async () => {
-          const publicDraft = () => {
-            check();
-            const { samples, provenance, privacyEntities, ...visible } = draft;
-            return { ...visible, ...issuePersonaDraft(store, provenance, Date.now(), { entities: privacyEntities }) };
-          };
-          try {
-            const snapshot = await runner.memoryExecutionSnapshot(combined);
-            check();
-            const summary = await summarizeStyle({ ctx, selection: snapshot.selection,
-              profile: draft.profile, samples: draft.samples, sampling: draft.sampling,
-              entities: draft.privacyEntities, signal: combined });
-            return { ...publicDraft(), persona: { ...draft.persona, prompt: summary.text }, summarized: true, usage: summary.usage };
-          } catch (error) {
-            check();
-            return { ...publicDraft(), summarized: false,
-              summaryError: `${publicError(error, '模型总结失败').message} 已明确回退为统计模板，未采用模型正文。` };
-          }
+          const snapshot = await runner.memoryExecutionSnapshot(combined);
+          check();
+          const summary = await summarizeStyle({ ctx, selection: snapshot.selection,
+            profile: draft.profile, samples: draft.samples, sampling: draft.sampling,
+            entities: draft.privacyEntities, warmth: draft.warmth, signal: combined });
+          check();
+          const { samples, privacyEntities, ...visible } = draft;
+          return { ...visible, persona: { ...draft.persona, prompt: summary.text }, summarized: true,
+            usage: summary.usage, ...(summary.warning ? { summaryWarning: summary.warning } : {}) };
         })();
         featureOperations.add(pending);
         void pending.finally(() => featureOperations.delete(pending)).catch(() => {});
@@ -511,6 +503,32 @@ export function createPluginService({
       }
       if (endpoint === 'memory.global.get') return channel.longMemory.view(currentAccount(payload).id);
       if (endpoint === 'memory.role.settings') return store.roleCardSettingsView();
+      if (endpoint === 'memory.role.labels') {
+        const accountId = currentAccount(payload).id, combined = AbortSignal.any([lifetime, ...(signal ? [signal] : [])]);
+        // Existing visible cards already include people authorized through a
+        // group. Pending/empty stored subjects are not part of this gallery read.
+        const contactIds = store.roleCards.list(accountId).map(view => view.personId);
+        const check = () => {
+          assertLive(combined); currentAccount(payload);
+          if (!worker.status().online) throw new ChannelError('MOMENTS_AUDIENCE_UNAVAILABLE', '微信当前离线，请连接后重试读取标签');
+        };
+        check();
+        if (typeof worker.readMomentsAudience !== 'function' || worker.status().momentsAudienceReady !== true)
+          throw new ChannelError('MOMENTS_AUDIENCE_UNAVAILABLE', '当前微信组件缺少标签读取能力或登录参数，请检查组件版本与登录状态');
+        const pending = worker.readMomentsAudience({ accountId, contactIds }, combined).then(value => {
+          check();
+          if (value?.accountId !== accountId || value.source !== 'wechat-role-labels-live' || value.membershipComplete !== true ||
+              !Array.isArray(value.contacts) || !Array.isArray(value.labels))
+            throw new ChannelError('MOMENTS_AUDIENCE_INCOMPLETE', '人物标签读取结果不完整，请重新读取');
+          const contacts = value.contacts.filter(row => contactIds.includes(row.id) && personAuthorized(store, accountId, row.id));
+          const visible = new Set(contacts.map(row => row.id));
+          return { ...value, contacts, labels: value.labels.map(label => {
+            const userIds = label.userIds.filter(id => visible.has(id));
+            return { ...label, userIds, memberCount: userIds.length };
+          }) };
+        });
+        featureOperations.add(pending); void pending.finally(() => featureOperations.delete(pending)).catch(() => {}); return pending;
+      }
       if (endpoint === 'memory.role.list') {
         const accountId = currentAccount(payload).id;
         return { people: store.roleCards.list(accountId).map(view => ({

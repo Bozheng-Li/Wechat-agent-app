@@ -24,7 +24,12 @@ function peopleFor(channel, scope, { history = [], participants = [] } = {}) {
 }
 
 export function readableRoleCard(view, beforeTime = Infinity) {
-  const card = emptyRoleCard(), evidence = {}, conflicts = [];
+  const card = emptyRoleCard(), evidence = {}, conflicts = [], timing = {};
+  const sourceTime = source => {
+    const times = [source?.sourceAt, ...(source?.sources || []).map(row => row.time)].filter(time => time != null);
+    if (!times.length) times.push(source?.updatedAt ?? view.updatedAt);
+    return times.every(Number.isFinite) ? Math.max(...times) : null;
+  };
   if (view.scope?.personId && view.scope.personId !== view.personId)
     throw new ChannelError('ROLE_CARD_SCOPE', '人物资料与当前人物不匹配');
   const deleted = view.deleted === true || view.tombstone === true || view.deletedAt != null || view.revokedAt != null;
@@ -41,30 +46,43 @@ export function readableRoleCard(view, beforeTime = Infinity) {
       conflicts.push(...fieldConflicts.filter(row => row.at <= beforeTime));
       continue;
     }
-    let reliable = true;
+    let historyUnavailable = future.some(row => !Object.hasOwn(row, 'beforeEvidence') || !Array.isArray(row.beforeConflicts));
     for (const row of [...future].reverse()) {
+      // A late background write can summarize facts already known at receipt.
+      // Only later sources need a historical version, not a later write time.
+      if (sourceTime(source) != null && sourceTime(source) <= beforeTime) break;
       if (row.after !== value || !Object.hasOwn(row, 'beforeEvidence') || !Array.isArray(row.beforeConflicts)) {
-        // Old bounded change rows do not prove the earlier source or conflict
-        // state. Never borrow a new quotation to support their `before` value.
-        reliable = false; break;
+        historyUnavailable = true; break;
       }
       value = row.before; source = row.beforeEvidence;
       fieldConflicts = row.beforeConflicts;
     }
-    if (!reliable) continue;
+    // A missing/empty historical version is not an empty current card. Keep
+    // the real current value and describe its time, never fabricate old proof.
+    if (historyUnavailable || !value || sourceTime(source) == null || sourceTime(source) > beforeTime) {
+      value = view.card[field]; source = view.evidence[field];
+      fieldConflicts = (view.conflicts || []).filter(row => row.field === field);
+    }
     fieldConflicts = (fieldConflicts || []).filter(row => row.field === field && row.at <= beforeTime);
     conflicts.push(...fieldConflicts);
-    const time = source?.sourceAt ?? source?.updatedAt ?? view.updatedAt ?? 0;
     const foreignSource = (source?.sources || []).some(row =>
       row.senderId && row.senderId !== view.personId ||
       row.accountId && view.scope?.accountId && row.accountId !== view.scope.accountId ||
-      row.time != null && (!Number.isFinite(row.time) || row.time > beforeTime) ||
       row.deleted === true || row.tombstone === true);
-    if (!value || !Number.isFinite(time) || time > beforeTime || foreignSource || fieldConflicts.length) continue;
+    if (!value || foreignSource || fieldConflicts.length) continue;
     card[field] = value;
     if (source) evidence[field] = structuredClone(source);
+    const time = sourceTime(source), updatedAt = source?.updatedAt ?? view.updatedAt;
+    if (Number.isFinite(beforeTime) && (historyUnavailable || time == null || time > beforeTime || updatedAt > beforeTime)) {
+      const status = time == null ? 'unknown-time' : time > beforeTime ? 'after-request' : 'background-update';
+      timing[field] = { status, requestedAt: beforeTime, sourceAt: time, updatedAt,
+        ...(historyUnavailable ? { historyUnavailable: true } : {}),
+        note: (historyUnavailable ? '无法还原接收时版本；以下为当前资料。' : '') +
+          (status === 'after-request' ? '请求后更新，不能当作接收请求时已知。' :
+            status === 'unknown-time' ? '来源时间未确定，不能断言接收请求时已知。' : '来源早于请求，后台整理晚于请求。') };
+    }
   }
-  return { personId: view.personId, roleId: view.roleId, card, evidence, conflicts: structuredClone(conflicts), revision: view.revision,
+  return { personId: view.personId, roleId: view.roleId, card, evidence, timing, conflicts: structuredClone(conflicts), revision: view.revision,
     updatedAt: view.updatedAt, reviewedAt: view.reviewedAt, pendingCount: view.pendingCount,
     found: Object.values(card).some(Boolean), scope: '同一微信账号内按人物共享，跨私聊、群聊和朋友圈' };
 }
@@ -115,6 +133,7 @@ export function personRoleCardTool(channel, scope, assertAllowed = () => {}, opt
       if (args.fields?.length) {
         view.card = Object.fromEntries(Object.entries(view.card).filter(([field]) => args.fields.includes(field)));
         view.evidence = Object.fromEntries(Object.entries(view.evidence).filter(([field]) => args.fields.includes(field)));
+        view.timing = Object.fromEntries(Object.entries(view.timing).filter(([field]) => args.fields.includes(field)));
         view.omitted = true;
       }
       if (args.query?.trim()) {
@@ -126,6 +145,7 @@ export function personRoleCardTool(channel, scope, assertAllowed = () => {}, opt
         if (selected.some(([field]) => !['label', 'addressAs'].includes(field))) {
           view.card = Object.fromEntries(selected);
           view.evidence = Object.fromEntries(selected.filter(([field]) => view.evidence[field]).map(([field]) => [field, view.evidence[field]]));
+          view.timing = Object.fromEntries(selected.filter(([field]) => view.timing[field]).map(([field]) => [field, view.timing[field]]));
           view.omitted = true;
         }
       }
@@ -170,14 +190,19 @@ export function personRoleContext(channel, scope, { text = '', history = [], par
       if (!onDemand) for (const field of ['addressAs', 'relationship', 'style', ...fields.filter(field => !['addressAs', 'relationship', 'style'].includes(field))]) {
         if (!view?.card[field] || !(['addressAs', 'relationship', 'style'].includes(field) ||
             relevantMemoryReference(view.card[field], text, { maxChars: 1000 }).matchedTerms.length)) continue;
-        const candidate = { ...data, card: { ...data.card, [field]: view.card[field] } };
-        if (lines.join('\n').length + JSON.stringify(candidate).length <= maxChars - 150) data.card = candidate.card;
+        const candidate = { ...data, card: { ...data.card, [field]: view.card[field] },
+          ...(view.timing[field] ? { timing: { ...data.timing, [field]: view.timing[field] } } : {}) };
+        if (lines.join('\n').length + JSON.stringify(candidate).length <= maxChars - 150) {
+          data.card = candidate.card;
+          if (candidate.timing) data.timing = candidate.timing;
+        }
       }
       let line = JSON.stringify(data);
       if (person.id === primary && line.length > maxChars - 150) {
         // Long conflict notes must not evict the actual recipient from the
         // index. Keep field-level conflict visibility; the tool has details.
         delete data.card;
+        delete data.timing;
         if (data.conflicts) data.conflicts = data.conflicts.map(({ field }) => ({ field }));
         line = JSON.stringify(data);
       }

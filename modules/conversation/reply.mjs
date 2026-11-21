@@ -126,6 +126,8 @@ export async function processReply(channel, item) {
           text: JSON.stringify({ request: item.text, savedTask: { id: task.id, content: task.content, when: new Date(task.nextRunAt).toISOString(),
             audience: reminder.audience === 'everyone' ? promptText("conversation/templates.json", "reply-text-1") : promptText("conversation/templates.json", "reply-text-2") } }),
           mode: 'confirmation',
+          now: () => channel.now(),
+          messageTime: item.message.time,
           group: record.chatType === 'group',
           persona,
           prompt: item.prompt,
@@ -217,11 +219,10 @@ export async function processReply(channel, item) {
         );
         const sinceMedia = lastMedia
           ? history.filter((entry) => entry.direction === 'incoming' && entry.observedAt > (lastMedia.sentAt ?? lastMedia.updatedAt)).length +
-            1
+            (!item.scheduled && !item.ambient && item.mode !== 'participate' ? 1 : 0)
           : Infinity;
-        const requestedImage = /表情包|发(?:一)?(?:张|个).{0,12}(?:图|表情)|配图|图片回复/u.test(item.text);
+        const requestedImage = !item.naturalDecision && /表情包|发(?:一)?(?:张|个).{0,12}(?:图|表情)|配图|图片回复/u.test(item.text);
         if (
-          !item.naturalDecision &&
           library.settings.enabled &&
           library.counts.enabled
         )
@@ -249,27 +250,22 @@ export async function processReply(channel, item) {
           // removed work mode: the picture joins this reply.
           let generation;
           try { generation = channel.imageGeneration?.status?.(); } catch { generation = undefined; }
-          if (generation?.enabled && generation.credentialConfigured)
+          if (!item.naturalDecision && generation?.enabled && generation.credentialConfigured)
             tools.push(imageGenerationTool({ imageGeneration: channel.imageGeneration, library: channel.library,
               scope, select: selectMedia, assertAllowed: assertMediaAllowed }));
-          const stickerPool = channel.library.search(record.accountId, '', { kind: 'sticker', limit: 40 });
-          if (stickerPool.length) {
-            // Show a few concrete stickers in the tool description: a model that has to
-            // search first almost always gives up and replies with text only.
-            const favorites = stickerPool.filter(asset => asset.nativeSticker?.favorite);
-            const pool = favorites.length ? favorites : stickerPool;
-            const shuffle = typeof channel.random === 'function' ? channel.random : Math.random;
-            const shuffled = [...pool];
-            for (let index = shuffled.length - 1; index > 0; index -= 1) {
-              const pick = Math.floor(Math.min(0.999999, shuffle()) * (index + 1));
-              [shuffled[index], shuffled[pick]] = [shuffled[pick], shuffled[index]];
-            }
-            const candidates = shuffled
-              .slice(0, 4)
-              .map(asset => ({ id: asset.id, name: asset.name, usage: asset.usage || '', description: asset.description || '' }));
+          const suggestion = channel.library.replyStickerCandidates(record.accountId, {
+            ...options, text: item.text, history, names: [persona.name, ...(persona.aliases || [])], limit: 4,
+          });
+          if (suggestion.eligibleCount) {
+            const candidates = suggestion.candidates.map(asset => ({ id: asset.id, name: asset.name,
+              usage: asset.usage || '', description: asset.description || '', tags: asset.tags || [] }));
             tools.push(...stickerReplyTools(channel.library, scope, assertMediaAllowed, selectMedia, { ...options, candidates }));
           }
-          if ((requestedImage || sinceMedia >= library.settings.minGapMessages) && channel.library.search(record.accountId, '', { kind: 'image', limit: 1 }).length)
+          channel.store.update(record, { stickerContext: {
+            eligible: suggestion.eligibleCount, candidates: suggestion.candidates.length, relevant: suggestion.relevantCount,
+            cooldown: options.cooldown, explicitRequest: options.explicitRequest, mode: item.naturalDecision ? 'natural' : 'reply',
+          } });
+          if (!item.naturalDecision && (requestedImage || sinceMedia >= library.settings.minGapMessages) && channel.library.search(record.accountId, '', { kind: 'image', limit: 1 }).length)
             tools.push(mediaReplyTool(channel.library, scope, assertMediaAllowed, selectMedia, { ...options, imagesOnly: true }));
         }
         const onDemand = item.config.memoryMode === 'on-demand';
@@ -419,7 +415,7 @@ export async function processReply(channel, item) {
         } });
         let decision;
         const chooseNatural = (raw) => {
-          decision = parseNaturalDecision(raw);
+          decision = parseNaturalDecision(raw, { allowEmptyReply: !!selectedMedia });
           return decision.text;
         };
         controller.signal.throwIfAborted();
@@ -429,6 +425,8 @@ export async function processReply(channel, item) {
             (generatedContext ? '\n\n' + generatedContext : ''),
           group: item.message.chatType === 'group',
           mode: item.mode,
+          now: () => channel.now(),
+          messageTime: item.message.time,
           prompt: item.prompt,
           persona: role?.persona || persona,
           adminNotes: role ? role.adminNotes : channel.longMemory.adminNotes(record),
@@ -464,7 +462,7 @@ export async function processReply(channel, item) {
         }
         if (item.naturalDecision) {
           if (!decision) {
-            decision = parseNaturalDecision(result.text);
+            decision = parseNaturalDecision(result.text, { allowEmptyReply: !!selectedMedia });
             result.text = decision.text;
           }
           replySignal.throwIfAborted();

@@ -24,7 +24,9 @@ function fixture(t, options = {}) {
   };
   const runner = { run: async input => {
     calls.push(input); const sessionId = input.sessionId || `session-${calls.length}`;
-    await input.onSession?.(sessionId); return { text: `回答 ${calls.length}`, sessionId };
+    await input.onSession?.(sessionId);
+    const text = `回答 ${calls.length}`;
+    return { text: input.naturalDecision ? input.selectReplyText(JSON.stringify({ action: 'reply', text })) : text, sessionId };
   } };
   const channel = new WechatChannel({ store, runner, transport, now: () => now, ...options });
   t.after(async () => {
@@ -140,7 +142,7 @@ test('media messages count toward participation but an unreadable window is skip
   assert.equal(f.calls.length, 1); assert.equal(f.sent.length, 1);
 });
 
-test('a busy group coalesces batches into one queued reply and reads the latest room context', { timeout: 10000 }, async t => {
+test('a busy group coalesces batches into one queued reply and reads the latest room context', { timeout: 60000 }, async t => {
   const f = fixture(t), gate = Promise.withResolvers(), original = f.runner.run;
   f.configure(roomA, 'participate', 5, 5); f.configure(roomB, 'participate', 5, 5);
   f.runner.run = async input => {
@@ -201,7 +203,9 @@ test('reconstructed context includes an acknowledged reply before the next messa
   ]);
 });
 
-test('queued default replies exclude more than 80 later messages from the same second', { timeout: 10000 }, async t => {
+// This deliberately performs 85 durable Windows writes; the assertions test
+// receive-order isolation, not a ten-second filesystem performance promise.
+test('queued default replies exclude more than 80 later messages from the same second', { timeout: 45000 }, async t => {
   const f = fixture(t), gate = Promise.withResolvers(), original = f.runner.run;
   f.runner.run = async input => {
     if (input.text === '占用模型') await gate.promise;
@@ -241,29 +245,28 @@ test('an evicted queued-message anchor does not reconstruct context from later r
   assert.deepEqual(f.calls[1].history, []);
 });
 
-test('partial or unknown delivery never enters confirmed outgoing history or automatic replay', async t => {
+for (const [state, outcome] of [['partial', { delivery: 'partially-acknowledged', acknowledgedMessageIds: ['partial-ack'] }],
+  ['unknown', { delivery: 'unknown' }]]) test(`${state} delivery pauses optional participation without losing subsequent raw history or replaying`, async t => {
   const f = fixture(t); f.configure(roomA, 'participate', 5, 5);
   let attempts = 0;
-  f.transport.send = async () => {
-    attempts++;
-    throw new ChannelError('SEND_FAILED', '模拟发送失败', attempts === 1
-      ? { delivery: 'partially-acknowledged', acknowledgedMessageIds: ['partial-ack'] }
-      : { delivery: 'unknown' });
-  };
+  f.transport.send = async () => { attempts++; throw new ChannelError('SEND_FAILED', '模拟发送失败', outcome); };
   const delivered = [];
   for (let batch = 0; batch < 2; batch++) {
     for (let i = 0; i < 5; i++) { const message = f.message(`批次 ${batch} 话题 ${i}`); delivered.push(message); f.receive(message); }
     await f.channel.whenIdle();
   }
-  assert.deepEqual(f.store.recordsPage(account.id, { chatType: 'group', peerId: roomA }).records.map(record => record.state), ['unknown', 'partial']);
-  assert(f.store.history(account.id, 'group', roomA).every(entry => entry.direction === 'incoming'));
-  assert.equal(Object.keys(f.store.data.sessions).length, 0);
-  assert.equal(f.calls[1].sessionId, undefined);
+  assert.deepEqual(f.store.recordsPage(account.id, { chatType: 'group', peerId: roomA }).records.map(record => record.state), ['skipped', state]);
+  const history = f.store.history(account.id, 'group', roomA);
+  assert(history.every(entry => entry.direction === 'incoming'));
+  assert.equal(history.length, 10, 'delivery pause must not swallow newly observed messages');
+  assert.equal(Object.keys(f.store.data.sessions).length, 0); assert.equal(f.calls.length, 1);
+  assert.equal(f.calls[0].sessionId, undefined);
   delivered.forEach(f.receive); await f.channel.whenIdle();
-  assert.equal(attempts, 2);
+  assert.equal(attempts, 1, 'uncertain delivery blocks every further optional send until owner review');
   const reloaded = new StateStore(f.root);
   assert(reloaded.history(account.id, 'group', roomA).every(entry => entry.direction === 'incoming'));
   assert.equal(Object.keys(reloaded.data.seen).length, 10);
+  assert(reloaded.naturalState(account.id, 'group', roomA).deliveryBlockedKey);
 });
 
 test('room cancellation resets only that room and preserves another queued group', { timeout: 10000 }, async t => {

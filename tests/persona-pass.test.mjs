@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PERSONA_PLANNING_PROMPT, PERSONA_PLAN_RETRY_NOTE, parsePersonaPlan, personaModeOf, personaPassInput } from '../modules/agent/persona-pass.mjs';
+import { PERSONA_PLANNING_PROMPT, parsePersonaPlan, personaModeOf, personaPassInput } from '../modules/agent/persona-pass.mjs';
 import { buildPersonaPassPrompt, buildWechatPrompt } from '../prompts/reply/compose.mjs';
 import { emptyPersona, validatePersona } from '../shared/contracts.mjs';
 import { personaDraft } from '../frontend/shared/drafts.mjs';
@@ -28,7 +28,7 @@ test('stage one is a compression step that carries facts, constraints and unknow
   assert.equal(plan.draft, undefined, 'stage one must not hand over a written reply');
   assert.equal(parsePersonaPlan('```json\n' + packet() + '\n```').facts.length, 2);
   assert.match(PERSONA_PLANNING_PROMPT, /不写回复正文/);
-  assert.match(PERSONA_PLANNING_PROMPT, /800 字以内/);
+  assert.match(PERSONA_PLANNING_PROMPT, /不丢失任务所需内容/);
 });
 
 test('planning excludes custom persona but preserves system and owner requirements in both strategies', () => {
@@ -59,15 +59,19 @@ test('stage two input carries the packet and only the recent turns', () => {
   assert(body.recentConversation[1].explanationViewpoint.includes('历史账号'));
 });
 
-test('a written reply is rejected instead of being smuggled in as a packet', () => {
-  for (const raw of ['面都泡上了，调料包还在旁边躺着。', '   ', '{}'])
-    assert.throws(() => parsePersonaPlan(raw), { code: 'PERSONA_PLAN_INVALID' }, raw);
-  const legacy = JSON.stringify({ purpose: '分享', facts: [], uncertainties: [], responsePlan: '接话', draft: '草稿' });
-  assert.throws(() => parsePersonaPlan(legacy), { code: 'PERSONA_PLAN_INVALID' });
+test('plain working material remains labelled notes, not an approved final reply or fabricated facts', () => {
+  const source = '面都泡上了，调料包还在旁边躺着。';
+  assert.deepEqual(parsePersonaPlan(source), { format: 'working-notes', notes: source });
+  const otherShape = JSON.stringify({ purpose: '分享', responsePlan: '接话', draft: '草稿' });
+  assert.equal(parsePersonaPlan(otherShape).notes, otherShape);
+  const extra = parsePersonaPlan(JSON.stringify({ facts: ['事实'], extraDetail: '额外材料' }));
+  assert(extra.notes.includes('额外材料'));
 });
 
-test('an oversized packet fails the compression check rather than being truncated', () => {
-  assert.throws(() => parsePersonaPlan(packet({ facts: Array.from({ length: 20 }, () => '很长的'.repeat(90)) })),
-    { code: 'PERSONA_PLAN_INVALID' });
-  assert.match(PERSONA_PLAN_RETRY_NOTE, /不要写任何回复内容/);
+test('valid long material and more than twenty facts are retained instead of causing a user-visible failure', () => {
+  const facts = Array.from({ length: 25 }, (_, i) => `${i}：${'很长的'.repeat(300)}`);
+  const result = parsePersonaPlan(packet({ request: '原始任务'.repeat(300), facts }));
+  assert.deepEqual(result.facts, facts);
+  assert.equal(result.request, '原始任务'.repeat(300));
+  assert.equal(parsePersonaPlan(JSON.stringify({ facts: [{ source: '原话', text: '对象化事实' }] })).facts[0], '{"source":"原话","text":"对象化事实"}');
 });

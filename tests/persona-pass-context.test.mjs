@@ -68,13 +68,14 @@ for (const mode of ['ordinary', 'natural', 'media']) test(`${mode} high precisio
   }
 });
 
-test('a malformed natural packet retries once without repeating a role-card read', async () => {
-  const f = fixture([call('wechat_role_card'), result('{"action":"reply","text":"只写了成稿"}'),
-    result(JSON.stringify({ action: 'reply', text: '数量话题', packet })), result('当前61')]);
+test('a natural reply without a structured packet still receives card evidence and independent expression', async () => {
+  const f = fixture([call('wechat_role_card'), result('{"action":"reply","text":"只写了工作草稿"}'), result('当前61')]);
   const output = await runLocalAgent(f.runner, { ...f.options, mode: 'natural', naturalDecision: { trigger: 'followup' },
     selectReplyText: raw => parseNaturalDecision(raw).text, allowEmptyReply: true });
-  assert.equal(output.text, '当前61'); assert.equal(f.reads(), 1); assert.equal(f.requests.length, 4);
-  assert(f.requests[2].messages.at(-1).content.includes('自然决策外层'));
+  assert.equal(output.text, '当前61'); assert.equal(f.reads(), 1); assert.equal(f.requests.length, 3);
+  const input = JSON.parse(f.requests[2].messages[1].content);
+  assert.equal(input.packet.notes, '只写了工作草稿');
+  assert(input.references.some(row => row.tool === 'wechat_role_card'));
 });
 
 test('a high-precision greeting still gets both passes, never a silent fast-path downgrade', async () => {

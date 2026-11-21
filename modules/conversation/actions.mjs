@@ -1,4 +1,4 @@
-import { ChannelError, validateSettings, validateConversationSettings, validatePublishScope, publishScopeOf } from "../../shared/contracts.mjs";
+import { ChannelError, validateSettings, validateConversationSettings, validatePublishScope, publishScopeOf, participationMode } from "../../shared/contracts.mjs";
 import { absoluteDirectory, sameDirectory } from "../../backend/storage/paths.mjs";
 import { preserveTimeValues } from '../../shared/time-settings.mjs';
 
@@ -76,9 +76,9 @@ export async function settingsMutation(
             )
           )
             store.resetProgress(selector.accountId, selector.chatType, selector.peerId, { resetNatural: false });
-          if (config.mode === 'natural') {
+          if (participationMode(config.mode)) {
             const natural = channel.natural.state(selector, config);
-            if (before.mode !== 'natural') natural.nextCheckAt = channel.now() + channel.natural.delay(config, natural);
+            if (!participationMode(before.mode)) natural.nextCheckAt = channel.natural.nextCheck(config, natural);
             channel.natural.save(selector, natural);
           }
         },

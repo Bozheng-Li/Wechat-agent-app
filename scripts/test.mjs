@@ -15,12 +15,12 @@ const business = [
   'moments-materials', 'moments-person-memory', 'moments-publication-recovery', 'moments-publish-scope', 'moments-publishing',
   'moments-read-authorization', 'moments-recency', 'moments-subject', 'moments-tools', 'natural-chat',
   'object-authorization', 'outbound-media', 'owner-cleanup', 'person-role-cards', 'persona-chat', 'persona-input', 'persona-library', 'persona-pass', 'persona-skill', 'public-language',
-  'quiet-replies', 'received-files', 'release-version', 'reply-context', 'reply-context-budget', 'reply-splitting', 'reply-style', 'role-card-groups',
+  'quiet-replies', 'received-files', 'release-version', 'reply-context', 'reply-context-budget', 'reply-modes', 'reply-splitting', 'reply-style', 'role-card-groups', 'persona-memory-tasks',
   'manual-reply-context', 'persona-chat-split-ui', 'role-card-version-history', 'role-memory-retrieval-source', 'split-delivery-history', 'understanding-contract',
   'context-evidence-order', 'persona-pass-context', 'persona-privacy', 'package-resources', 'package-artifacts',
   'progressive-prompt', 'progressive-dialogue', 'progressive-tools',
   'role-memory-authorization', 'role-memory-practical', 'role-memory-production', 'schedule-countdown',
-  'scheduled-features', 'search-fallback', 'sticker-library', 'sticker-service', 'sticker-tools', 'storage-recovery', 'storage-v2', 'style-distill', 'style-summary',
+  'participation-modes', 'scheduled-features', 'search-fallback', 'sticker-candidates', 'sticker-library', 'sticker-service', 'sticker-tools', 'storage-recovery', 'storage-v2', 'style-distill', 'style-summary',
   'task-history', 'task-mentions', 'test-runner-coverage', 'time-settings', 'web-search', 'worker-send-account', 'worker-transfer-wait', 'workspace-root', 'yaml-configuration',
 ];
 const files = [...fs.readdirSync(path.join(root, 'tests')).filter(name => /^app-.*\.test\.mjs$/.test(name)), ...business.map(name => name + '.test.mjs')];

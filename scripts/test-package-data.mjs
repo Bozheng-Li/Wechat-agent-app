@@ -4,7 +4,7 @@ import os from 'node:os';
 import assert from 'node:assert/strict';
 import { pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { parse } from 'yaml';
+import { parse, stringify } from 'yaml';
 import { StateStore } from '../backend/storage/state-store.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
@@ -51,6 +51,26 @@ try {
   assert.deepEqual(reloaded.settings('legacy-account').privatePeers, ['legacy-friend']);
   assert.equal(reloaded.settings('legacy-account').prompt, 'OWNER_SENTINEL');
   report.checks.push('library bodies, distinct titles, selection and original grants survive packaged restart');
+
+  const oldConfig = parse(fs.readFileSync(configFile, 'utf8'));
+  oldConfig.personas.push({ id: 'old-distilled', name: '旧模型总结', source: 'distilled', disabled: true,
+    persona: { name: '旧助手', aliases: [], prompt: 'OLD_DISTILLED_SENTINEL' } });
+  oldConfig.activePersonaId = 'old-distilled';
+  fs.writeFileSync(configFile, stringify(oldConfig), 'utf8');
+  app = await createDesktopApplication({ dataHome, encryption });
+  const oldPersona = await app.call('status');
+  assert.equal(oldPersona.value.startupError, undefined);
+  assert.equal(oldPersona.value.persona.prompt, 'OLD_DISTILLED_SENTINEL');
+  assert.equal(oldPersona.value.personas.activeId, 'old-distilled');
+  assert.equal(oldPersona.value.personas.items.find(item => item.id === 'old-distilled').disabled, undefined);
+  assert.equal((await app.call('persona.save', { id: 'old-distilled', persona: { name: '旧助手', aliases: [], prompt: 'USER_EDITED_OLD_SUMMARY' } })).ok, true);
+  assert.equal((await app.call('persona.create', { source: 'distilled', name: '无令牌总结', persona: { name: '助手', aliases: [], prompt: 'NO_TOKEN_SUMMARY' } })).ok, true);
+  await app.close(); app = null;
+  const finalStore = new StateStore(dataHome);
+  assert.equal(finalStore.persona().prompt, 'NO_TOKEN_SUMMARY');
+  assert.equal(finalStore.personaEntries().find(item => item.id === 'old-distilled').persona.prompt, 'USER_EDITED_OLD_SUMMARY');
+  assert.deepEqual(finalStore.settings('legacy-account').privatePeers, ['legacy-friend']);
+  report.checks.push('legacy distilled/disabled entries stay usable, editable and save offline without a draft token');
 
   const broken = fs.readFileSync(configFile, 'utf8') + '\nthis_field_does_not_exist: true\n';
   fs.writeFileSync(configFile, broken);

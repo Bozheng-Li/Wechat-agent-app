@@ -8,6 +8,13 @@ export function withTimeout(signal, ms) {
   return signal ? AbortSignal.any([signal, AbortSignal.timeout(ms)]) : AbortSignal.timeout(ms);
 }
 
+export function memoryRpcTimeoutMs(endpoint) {
+  // The worker allows 5 minutes for batched label reads. Leave room for its
+  // coded result instead of cancelling it at the ordinary page's 30 seconds.
+  if (endpoint === 'memory.role.labels' || endpoint === 'moments.audience') return 310000;
+  return ['memory.compress', 'memory.retryImages', 'memory.global.extract', 'memory.images.import'].includes(endpoint) ? 300000 : 30000;
+}
+
 export async function call(connection, endpoint, payload = {}, signal) {
   let result;
   try {
@@ -45,7 +52,18 @@ export async function call(connection, endpoint, payload = {}, signal) {
         : '未能确认操作结果，请重新读取状态，核对是否已保存后再试。'
     );
     error.cause = cause;
-    if (typeof cause?.name === 'string') error.code = cause.name === 'AbortError' ? 'RPC_ABORTED' : 'RPC_UNAVAILABLE';
+    const reason = signal?.aborted ? signal.reason : cause;
+    const labels = ['memory.role.labels', 'moments.audience'].includes(endpoint);
+    if (reason?.name === 'TimeoutError') {
+      error.code = 'RPC_TIMEOUT';
+      if (labels) error.message = '微信标签读取超过本页等待时限，本次读取已取消；请重试。';
+    } else if (reason?.name === 'AbortError') {
+      error.code = 'RPC_ABORTED';
+      if (labels) error.message = '本次标签读取已取消，可以重新读取。';
+    } else {
+      error.code = /^[A-Z][A-Z0-9_]{0,63}$/.test(cause?.code ?? '') ? cause.code : 'RPC_UNAVAILABLE';
+      if (labels) error.message = '应用页面与后台通信失败，未取得标签读取结果；请先重载页面后重试。';
+    }
     throw error;
   }
   if (!result?.ok) {

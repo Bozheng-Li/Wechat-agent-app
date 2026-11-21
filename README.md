@@ -9,19 +9,19 @@
 
 <p>
   <img src="https://img.shields.io/badge/Windows-10%20%2F%2011%20%C2%B7%20x64-243a32?style=flat-square" alt="Windows 10 / 11 x64" />
-  <img src="https://img.shields.io/badge/version-0.1.7--preview.1-12785a?style=flat-square" alt="0.1.7-preview.1" />
+  <img src="https://img.shields.io/badge/version-0.1.7--preview.10-12785a?style=flat-square" alt="0.1.7-preview.10" />
   <img src="https://img.shields.io/badge/数据-只存在本机-4b6a5a?style=flat-square" alt="数据只存在本机" />
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-5b6470?style=flat-square" alt="AGPL-3.0-or-later" /></a>
 </p>
 
-<h3><a href="https://github.com/Bozheng-Li/Wechat-agent-app/releases/download/v0.1.7-preview.1/Wechat-Agent-App-0.1.7-preview.1-Setup.exe">↓ 下载 Windows 安装包</a></h3>
+<h3><a href="https://github.com/Bozheng-Li/Wechat-agent-app/releases/download/v0.1.7-preview.10/Wechat-Agent-App-0.1.7-preview.10-Setup.exe">↓ 下载 Windows 安装包</a></h3>
 
 <p>
   <a href="#新手上手教程">新手教程</a> ·
   <a href="#界面预览">界面预览</a> ·
   <a href="#运行方式与数据">数据与备份</a> ·
   <a href="#常见问题">常见问题</a> ·
-  <a href="https://github.com/Bozheng-Li/Wechat-agent-app/releases/tag/v0.1.7-preview.1">版本说明</a> ·
+  <a href="https://github.com/Bozheng-Li/Wechat-agent-app/releases/tag/v0.1.7-preview.10">版本说明</a> ·
   <a href="https://github.com/Bozheng-Li/Wechat-agent-app/issues">反馈问题</a>
 </p>
 
@@ -69,9 +69,9 @@
 
 | 文件 | 用途 | 下载 |
 | --- | --- | --- |
-| **Windows x64 安装包** | 直接安装和使用 | [Wechat-Agent-App-0.1.7-preview.1-Setup.exe](https://github.com/Bozheng-Li/Wechat-agent-app/releases/download/v0.1.7-preview.1/Wechat-Agent-App-0.1.7-preview.1-Setup.exe) |
-| SHA-256 校验文件 | 核对下载文件完整性 | [Setup.exe.sha256](https://github.com/Bozheng-Li/Wechat-agent-app/releases/download/v0.1.7-preview.1/Wechat-Agent-App-0.1.7-preview.1-Setup.exe.sha256) |
-| 本版本源码 | 阅读代码、修改或自行构建 | [Source code](https://github.com/Bozheng-Li/Wechat-agent-app/archive/refs/tags/v0.1.7-preview.1.zip) |
+| **Windows x64 安装包** | 直接安装和使用 | [Wechat-Agent-App-0.1.7-preview.10-Setup.exe](https://github.com/Bozheng-Li/Wechat-agent-app/releases/download/v0.1.7-preview.10/Wechat-Agent-App-0.1.7-preview.10-Setup.exe) |
+| SHA-256 校验文件 | 核对下载文件完整性 | [Setup.exe.sha256](https://github.com/Bozheng-Li/Wechat-agent-app/releases/download/v0.1.7-preview.10/Wechat-Agent-App-0.1.7-preview.10-Setup.exe.sha256) |
+| 本版本源码 | 阅读代码、修改或自行构建 | [Source code](https://github.com/Bozheng-Li/Wechat-agent-app/archive/refs/tags/v0.1.7-preview.10.zip) |
 
 安装包约 250 MB，包含运行所需的全部组件。安装向导可以选择安装位置；卸载会保留数据目录。
 
@@ -81,7 +81,7 @@
 同时下载 `.exe` 和 `.sha256`，在 PowerShell 里执行：
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\Wechat-Agent-App-0.1.7-preview.1-Setup.exe
+Get-FileHash -Algorithm SHA256 .\Wechat-Agent-App-0.1.7-preview.10-Setup.exe
 ```
 
 把输出的值与 `.sha256` 文件里的值逐位比对，一致就说明文件完整。SHA-256 只能核对“下载是否完整”，不能替代代码签名——预览版没有代码签名，因此 Windows 首次运行可能弹出“未知发布者”提示。
@@ -106,7 +106,7 @@ Get-FileHash -Algorithm SHA256 .\Wechat-Agent-App-0.1.7-preview.1-Setup.exe
 <details open>
 <summary><strong>第 1 步 · 安装并第一次打开</strong></summary>
 
-1. 双击 `Wechat-Agent-App-0.1.7-preview.1-Setup.exe`，按向导选择安装位置。
+1. 双击 `Wechat-Agent-App-0.1.7-preview.10-Setup.exe`，按向导选择安装位置。
 2. 安装完成后从开始菜单打开 **微信 Agent**。
 3. 第一次启动不会读取旧插件的账号，也不会自动连接旧账号，界面停在 **概览**，显示“微信未连接”。
 
@@ -176,7 +176,7 @@ Get-FileHash -Algorithm SHA256 .\Wechat-Agent-App-0.1.7-preview.1-Setup.exe
 <details>
 <summary><strong>第 5 步 · 人设、长期记忆与脱敏</strong></summary>
 
-**人设**在 **设置** 里的默认助手中修改：名字、背景、性格、说话风格。应用只保留一个全局默认助手，所有会话共用，不需要给每个群单独写人设。
+**人设**在 **设置** 里的默认助手中修改：名字、背景、性格、说话风格。应用只保留一个全局默认助手，所有会话共用，不需要给每个群单独写人设。从聊天记录提炼人设时，配置的模型服务会收到做过基础脱敏的聊天片段、相邻发言和时间。片段仍可能包含私人信息，生成的人设可以在保存前检查和编辑。
 
 **长期记忆**在应用里自动整理：把聊天中明确表达的身份、偏好、禁忌、约定与更正保存成有来源的事实，之后对话时按需检索。记忆库页可以查看、编辑与删除这些条目。
 

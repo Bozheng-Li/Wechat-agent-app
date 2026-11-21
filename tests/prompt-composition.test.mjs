@@ -194,12 +194,13 @@ test('an unconfigured persona retains default examples without forcing them on a
   assert(f.scopes.at(-1).prompt.text.includes(DEFAULT_CONVERSATION_REPLY_TASK));
 });
 
-test('bare greetings do not inherit a server clock while real date questions and due tasks keep it', async () => {
+test('greetings, date questions and due tasks keep the clock without mechanical correction', async () => {
   const f = fixture();
   f.settings.persona.aliases = ['掌柜'];
   for (const text of ['早上好。', '晚上好！', '你好呀', 'Good morning!', 'ROOM_NAME，早呀。', '你好啊，掌柜！']) {
     await f.runner.run({ text, signal: signal() });
-    assert(!f.scopes.at(-1).prompt.text.includes('【当前时间】'));
+    assert(f.scopes.at(-1).prompt.text.includes('【当前时间】'));
+    assert(f.scopes.at(-1).prompt.text.includes('无需报时或机械纠正'));
     assert(f.messages.at(-1).content[0].text.endsWith(text));
   }
   for (const request of [{ text: '早上好，今天几号？' }, { text: '十分钟后提醒我喝水。' },

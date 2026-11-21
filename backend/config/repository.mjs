@@ -173,7 +173,6 @@ export class ConfigurationRepository {
         id: entry.id, name: entry.name, source: entry.source, createdAt: entry.createdAt,
         ...(Number.isSafeInteger(entry.updatedAt) ? { updatedAt: entry.updatedAt } : {}),
         ...(entry.provenance ? { provenance: clone(entry.provenance) } : {}),
-        ...(entry.disabled === true ? { disabled: true } : {}),
         persona: persona(entry.persona, 'personas/entries/' + entry.id),
       }));
       const active = next.personas.find(entry => entry.id === next.activePersonaId) || next.personas[0];

@@ -1,4 +1,4 @@
-import { personaText, emptyNaturalSettings } from "../../shared/contracts.mjs";
+import { personaText, emptyNaturalSettings, conversationNaturalSettings } from "../../shared/contracts.mjs";
 
 export const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 
@@ -48,7 +48,7 @@ export const naturalPayload = (value) =>
   );
 
 export const configDraft = (value = {}) => ({
-  mode: value.mode || 'default',
+  mode: value.mode === 'participate' ? 'natural' : value.mode || 'default',
   remoteEnabled: value.remoteEnabled ?? false,
   adminIds: [...(value.adminIds || [])],
   intervalMode: value.intervalMode || 'random',
@@ -59,7 +59,8 @@ export const configDraft = (value = {}) => ({
   memoryMode: value.memoryMode || 'always',
   memoryWindowChars: value.memoryWindowChars == null ? '' : String(value.memoryWindowChars),
   allowChatTasks: value.allowChatTasks ?? true,
-  natural: naturalDraft(value.natural),
+  natural: naturalDraft({ ...conversationNaturalSettings(value),
+    ...(value.mode === 'participate' ? { messageEnabled: true, timerEnabled: false, followupEnabled: false } : {}) }),
 });
 
 export const configPayload = ({ personaMode, persona, ...value }) => ({

@@ -360,25 +360,13 @@ export class StateStore {
     if (stored.length)
       return stored.map(entry => ({ id: entry.id, name: entry.name, source: entry.source,
         createdAt: entry.createdAt, updatedAt: entry.updatedAt, persona: clone(entry.persona),
-        ...(entry.provenance ? { provenance: clone(entry.provenance) } : {}),
-        ...(entry.disabled === true ? { disabled: true } : {}) }));
+        ...(entry.provenance ? { provenance: clone(entry.provenance) } : {}) }));
     // Older workspaces hold a single persona; present it as one entry.
     const legacy = clone(this.data.persona ?? defaults.persona());
     return [{ id: 'default', name: legacy.name || '微信助手', source: 'manual', createdAt: 0, persona: legacy }];
   }
-  personaSourceAvailable(entry) {
-    if (entry.source !== 'distilled') return true;
-    if (entry.disabled || !entry.provenance) return false;
-    const source = entry.provenance, excluded = this.data.groupMemberExclusions?.[source.accountId]?.excludedPersonIds ?? [];
-    if (excluded.includes(source.personId) || !personAuthorized(this, source.accountId, source.personId)) return false;
-    return source.sourceScopes.every(scope => {
-      if (this.data.authorizationRevocations?.some(row => row.accountId === scope.accountId && row.chatType === scope.chatType && row.peerId === scope.peerId)) return false;
-      return scope.chatType === 'private' ? personAuthorized(this, scope.accountId, scope.peerId)
-        : this.settings(scope.accountId).groups.includes(scope.peerId);
-    });
-  }
   activePersonaId() {
-    const entries = this.personaEntries().filter(entry => this.personaSourceAvailable(entry));
+    const entries = this.personaEntries();
     return (entries.find(entry => entry.id === this.data.activePersonaId) || entries[0])?.id ?? null;
   }
   persona() {
@@ -389,40 +377,18 @@ export class StateStore {
     }
     return clone(this.data.persona ?? defaults.persona());
   }
-  revokeDerivedPersonas(scopes) {
-    const entries = this.personaEntries();
-    let changed = false;
-    const next = entries.map(entry => {
-      const source = entry.provenance;
-      // Legacy unknown-source entries are quarantined, never attributed to a random account.
-      if (entry.source !== 'distilled' || !source || !scopes.some(scope => scope.accountId === source.accountId &&
-        ((scope.chatType === 'private' && scope.peerId === source.personId) || source.sourceScopes.some(row =>
-          row.chatType === scope.chatType && row.peerId === scope.peerId)))) return entry;
-      changed = true;
-      return { ...entry, disabled: true, persona: defaults.persona(),
-        provenance: { ...source, phrases: [] }, updatedAt: Date.now() };
-    });
-    if (changed) this._writePersonas(next, this.activePersonaId());
-    return changed;
-  }
   personasView() {
     const entries = this.personaEntries();
     return {
       activeId: this.activePersonaId(),
-      suspendedId: entries.find(entry => entry.id === this.data.activePersonaId && !this.personaSourceAvailable(entry))?.id ?? null,
       items: entries.map(entry => ({ id: entry.id, name: entry.name, source: entry.source,
-        ...(entry.source === 'distilled' && !entry.provenance ? { legacyPersona: clone(entry.persona) } : {}),
         createdAt: entry.createdAt, updatedAt: entry.updatedAt || entry.createdAt,
-        disabled: !this.personaSourceAvailable(entry),
-        disabledReason: entry.source === 'distilled' && !entry.provenance ? '旧提炼缺少来源，请重新生成' :
-          !this.personaSourceAvailable(entry) ? '提炼来源已撤销，请重新生成' : '',
         chars: Array.from(personaText(entry.persona)).length })),
     };
   }
   _writePersonas(list, activeId) {
     const personas = validatePersonaList(list);
-    const available = personas.filter(entry => this.personaSourceAvailable(entry));
-    const active = available.find(entry => entry.id === activeId) || available[0];
+    const active = personas.find(entry => entry.id === activeId) || personas[0];
     const before = { personas: this.data.personas, activePersonaId: this.data.activePersonaId, persona: this.data.persona };
     this.data.personas = personas;
     this.data.activePersonaId = active?.id ?? personas[0].id;
@@ -450,15 +416,12 @@ export class StateStore {
     const persona = validateGlobalPersona(input);
     const id = this._personaId(entries);
     const entry = validatePersonaEntry({ id, name: name || persona.name || '新人设', source, createdAt: Date.now(), persona, provenance });
-    if (!this.personaSourceAvailable(entry)) throw new ChannelError('PERSONA_SOURCE_REVOKED', '提炼来源无效或已撤销，请重新生成。');
     return this._writePersonas([...entries, entry], id);
   }
   selectPersona(id) {
     const entries = this.personaEntries();
     if (!entries.some(entry => entry.id === id))
       throw new ChannelError('PERSONA_NOT_FOUND', '人设不存在，请刷新后重试');
-    if (!this.personaSourceAvailable(entries.find(entry => entry.id === id)))
-      throw new ChannelError('PERSONA_SOURCE_REVOKED', '提炼来源已撤销或缺失，请重新生成。');
     return this._writePersonas(entries, id);
   }
   deletePersona(id) {

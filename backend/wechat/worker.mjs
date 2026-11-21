@@ -115,7 +115,7 @@ async function perform(id, op, args) {
       const account = backend.session.value;
       if (!account || args?.accountId !== account.wxid) throw new ChannelError('ACCOUNT_CHANGED', '微信账号已变化，未读取其他账号的标签和联系人');
       const controller = new AbortController(); sending.set(id, controller);
-      try { return await backend.readMomentsAudience(controller.signal); }
+      try { return await backend.readMomentsAudience(controller.signal, args.contactIds); }
       finally { sending.delete(id); }
     }
     case 'moments.publication':
@@ -181,11 +181,11 @@ process.on('message', async message => {
       code: error?.code || 'WECHAT_FAILED',
       message: error instanceof ChannelError || /^ERR_STICKER_/.test(error?.code ?? '') || message.op === 'files' && /^ERR_FILE_/.test(error?.code ?? '') || ['ERR_LOGIN_BUSY', 'ERR_SESSION_EXISTS', 'ERR_LOGIN_HANDOFF', 'ERR_IMAGE_FORMAT', 'ERR_IMAGE_CREDENTIAL', 'ERR_FILE_CREDENTIAL', 'ERR_FILE_REJECTED', 'ERR_FILE_NETWORK', 'ERR_FILE_PROTOCOL', 'ERR_UNSUPPORTED_IMAGE', 'ERR_MENTION_TARGET', 'ERR_MENTION_LIMIT',
         'ERR_INVALID_MOMENTS_QUERY', 'ERR_MOMENTS_OFFLINE', 'ERR_MOMENTS_CREDENTIAL', 'ERR_MOMENTS_NETWORK', 'ERR_MOMENTS_REJECTED', 'ERR_MOMENTS_PROTOCOL', 'ERR_MOMENTS_CURSOR', 'ERR_MOMENTS_ACCOUNT_CHANGED',
-        'ERR_INVALID_MOMENTS_WRITE', 'ERR_MOMENTS_WRITE_REJECTED', 'ERR_MOMENTS_WRITE_PROTOCOL', 'ERR_MOMENTS_TARGET_UNAVAILABLE', 'ERR_MOMENTS_AUDIENCE'].includes(error?.code)
+        'ERR_INVALID_MOMENTS_WRITE', 'ERR_MOMENTS_WRITE_REJECTED', 'ERR_MOMENTS_WRITE_PROTOCOL', 'ERR_MOMENTS_TARGET_UNAVAILABLE', 'ERR_MOMENTS_AUDIENCE', 'ERR_MOMENTS_AUDIENCE_TIMEOUT'].includes(error?.code)
         ? error.message : message.op === 'send' ? publicSendErrorMessage(error) ?? '微信发送失败，请检查连接及回执记录' : '微信操作失败，请检查连接状态',
       details: {
           ...(message.op === 'moments.write' && ['unknown', 'not-sent', 'rejected'].includes(details.delivery) ? { snsDelivery: details.delivery } : {}),
-        ...(['send', 'moments.read', 'moments.images', 'moments.publication', 'moments.write'].includes(message.op) && Number.isSafeInteger(details.ret) && details.ret >= -0x80000000 && details.ret <= 0x7fffffff ? { ret: details.ret } : {}),
+        ...(['send', 'moments.read', 'moments.images', 'moments.publication', 'moments.write', 'moments.audience'].includes(message.op) && Number.isSafeInteger(details.ret) && details.ret >= -0x80000000 && details.ret <= 0x7fffffff ? { ret: details.ret } : {}),
         ...(publication ? { publication } : {}),
         ...['unknown', 'partially-acknowledged', 'rejected', 'not-sent'].includes(details.delivery) ? { delivery: details.delivery } : {},
         ...Array.isArray(details.acknowledgedMessageIds) ? { acknowledgedMessageIds: details.acknowledgedMessageIds } : {},

@@ -28,7 +28,13 @@ export const loginLabels = {
   online: '微信已连接',
 };
 
-export const modeLabels = { default: '默认回复', nickname: '昵称唤醒', participate: '主动参与', natural: '自然陪聊' };
+export const modeLabels = { default: '默认回复', nickname: '昵称唤醒', participate: '参与群聊（旧版按消息）', natural: '参与群聊' };
+
+export const groupReplyModes = [
+  ['default', '默认回复', '群内 @ 当前微信账号，或以 /agent 开头提问时回复。'],
+  ['nickname', '昵称唤醒', '在默认回复基础上，增加 Agent 名字与昵称唤醒。'],
+  ['natural', '参与群聊', '保留全部直接唤醒；下方明确选择新消息、冷场和接续机会，由模型判断是否值得参与。'],
+];
 
 export const pageLabels = {
   traces: '任务执行轨迹',

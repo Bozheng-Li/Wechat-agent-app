@@ -113,24 +113,6 @@ export function validateGlobalPersona(input) {
 export const PERSONA_LIMIT = 12;
 export const PERSONA_SOURCES = ['manual', 'distilled'];
 
-export function validatePersonaProvenance(input) {
-  const validId = value => typeof value === 'string' && value.length > 0 && value.length <= 150 && !/[\s\u0000-\u001f]/u.test(value);
-  const fail = () => { throw new ChannelError('INVALID_PERSONA_PROVENANCE', '提炼来源记录无效，请重新生成。'); };
-  if (!input || input.version !== 1 || !validId(input.accountId) || !validId(input.personId) || input.personId.endsWith('@chatroom') ||
-    !Number.isSafeInteger(input.epoch) || input.epoch < 0 || !Number.isSafeInteger(input.generatedAt) || input.generatedAt < 0 ||
-    !Array.isArray(input.sourceScopes) || !input.sourceScopes.length || input.sourceScopes.length > 60) fail();
-  const sourceScopes = input.sourceScopes.map(scope => {
-    if (!scope || scope.accountId !== input.accountId || !['private', 'group'].includes(scope.chatType) || !validId(scope.peerId)) fail();
-    return { accountId: scope.accountId, chatType: scope.chatType, peerId: scope.peerId };
-  });
-  if (new Set(sourceScopes.map(scope => JSON.stringify(scope))).size !== sourceScopes.length) fail();
-  const phrases = input.phrases ?? [];
-  if (!Array.isArray(phrases) || phrases.length > 80 || phrases.some(value => typeof value !== 'string' ||
-    Array.from(value).length < 2 || Array.from(value).length > 10 || /[\u0000-\u001f]/u.test(value))) fail();
-  return { version: 1, accountId: input.accountId, personId: input.personId, epoch: input.epoch,
-    generatedAt: input.generatedAt, sourceScopes, phrases: [...new Set(phrases)] };
-}
-
 export function validatePersonaEntry(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input))
     throw new ChannelError('INVALID_PERSONA', '人设条目格式不正确');
@@ -140,11 +122,11 @@ export function validatePersonaEntry(input) {
     throw new ChannelError('INVALID_PERSONA', '请填写人设名称，最多 80 字');
   const source = PERSONA_SOURCES.includes(input.source) ? input.source : 'manual';
   const createdAt = Number.isSafeInteger(input.createdAt) && input.createdAt >= 0 ? input.createdAt : 0;
-  const provenance = source === 'distilled' && input.provenance ? validatePersonaProvenance(input.provenance) : undefined;
+  // Earlier builds stored source metadata; retain it as notes, never as approval.
+  const provenance = input.provenance && typeof input.provenance === 'object' ? structuredClone(input.provenance) : undefined;
   return { id: input.id, name: input.name.trim(), source, createdAt,
     ...(Number.isSafeInteger(input.updatedAt) && input.updatedAt >= 0 ? { updatedAt: input.updatedAt } : {}),
     ...(provenance ? { provenance } : {}),
-    ...(source === 'distilled' && (input.disabled === true || !provenance) ? { disabled: true } : {}),
     persona: validateGlobalPersona(input.persona) };
 }
 
@@ -203,6 +185,11 @@ export function validateModelConfig(input) {
 
 export function emptyNaturalSettings() {
   return {
+    // New participation starts with message opportunities only. Legacy mode
+    // permissions are restored by conversationNaturalSettings, never by the UI.
+    messageEnabled: true,
+    timerEnabled: false,
+    followupEnabled: false,
     temperament: 'balanced',
     intervalMode: 'random',
     minMinutes: 30,
@@ -220,7 +207,7 @@ export function emptyNaturalSettings() {
 
 export function validateNaturalSettings(input = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input))
-    throw new ChannelError('INVALID_NATURAL_SETTINGS', '自然陪聊设置格式不正确');
+    throw new ChannelError('INVALID_NATURAL_SETTINGS', '群聊参与设置格式不正确');
   const value = { ...emptyNaturalSettings(), ...input };
   if (!['quiet', 'balanced', 'lively'].includes(value.temperament) || !['random', 'fixed'].includes(value.intervalMode))
     throw new ChannelError('INVALID_NATURAL_SETTINGS', '请选择参与性格和主动开话题的间隔方式');
@@ -231,8 +218,8 @@ export function validateNaturalSettings(input = {}) {
     value.minMinutes > value.maxMinutes
   )
     throw new ChannelError('INVALID_NATURAL_SETTINGS', '主动间隔应为 1–1440 分钟的整数，最少分钟不能超过最多分钟');
-  if (typeof value.smartSkip !== 'boolean' || typeof value.activeHours !== 'boolean')
-    throw new ChannelError('INVALID_NATURAL_SETTINGS', '请选择智能跳过和活跃时段是否开启');
+  if (['messageEnabled', 'timerEnabled', 'followupEnabled', 'smartSkip', 'activeHours'].some(key => typeof value[key] !== 'boolean'))
+    throw new ChannelError('INVALID_NATURAL_SETTINGS', '请选择参与触发、智能跳过和活跃时段是否开启');
   for (const [key, min, max, label] of [
     ['followupSeconds', 0, 600, '连续对话窗口（秒）'],
     ['maxUnanswered', 1, 5, '无人接话次数'],
@@ -248,6 +235,31 @@ export function validateNaturalSettings(input = {}) {
   )
     throw new ChannelError('INVALID_NATURAL_SETTINGS', '活跃时段请填写不同的开始和结束时间；全天运行可关闭时段限制');
   return Object.fromEntries(Object.keys(emptyNaturalSettings()).map((key) => [key, value[key]]));
+}
+
+/** Preserve saved mode permissions before filling newly introduced defaults. */
+export function conversationNaturalSettings(config = {}) {
+  const input = config.natural;
+  if (input !== undefined && (!input || typeof input !== 'object' || Array.isArray(input)))
+    return validateNaturalSettings(input);
+  const legacyNatural = config.mode === 'natural' &&
+    !['messageEnabled', 'timerEnabled', 'followupEnabled'].some(key => Object.hasOwn(input ?? {}, key));
+  return validateNaturalSettings({
+    messageEnabled: true,
+    timerEnabled: legacyNatural,
+    followupEnabled: legacyNatural,
+    ...input,
+  });
+}
+
+export const participationMode = mode => ['participate', 'natural'].includes(mode);
+
+/** Legacy participate is strictly count-only, even with latent natural settings. */
+export function participationTriggers(config) {
+  if (config.mode === 'participate') return { message: true, timer: false, followup: false };
+  if (config.mode !== 'natural') return { message: false, timer: false, followup: false };
+  const settings = conversationNaturalSettings(config);
+  return { message: settings.messageEnabled, timer: settings.timerEnabled, followup: settings.followupEnabled };
 }
 
 export function emptyNaturalState() {
@@ -369,7 +381,7 @@ export function validateConversationSettings(input) {
     memoryMode,
     remoteEnabled: input.remoteEnabled ?? false,
     adminIds,
-    natural: validateNaturalSettings(input.natural),
+    natural: conversationNaturalSettings(input),
   };
 }
 

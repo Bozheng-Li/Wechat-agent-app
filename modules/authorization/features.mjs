@@ -26,11 +26,6 @@ export function storedObjectScopes(channel) {
   const person = (accountId, peerId) => add({ accountId, chatType: 'private', peerId });
   for (const scope of [...stateBackupScopes(channel.store), ...Object.values(channel.store.data.conversations), ...Object.values(channel.memory.index.conversations),
     ...channel.imageMemory.storedScopes()]) add(scope);
-  for (const entry of channel.store.personaEntries?.() ?? []) {
-    if (entry.source !== 'distilled' || !entry.provenance || entry.disabled) continue;
-    person(entry.provenance.accountId, entry.provenance.personId);
-    for (const scope of entry.provenance.sourceScopes) add(scope);
-  }
   for (const task of channel.scheduler?.data.tasks || []) add(task);
   const automation = channel.momentsAutomation;
   for (const rule of Object.values(automation.likes.data.accounts)) for (const id of rule.settings.userIds) person(rule.accountId, id);
@@ -134,7 +129,6 @@ function purgeConfiguration(channel, scopes) {
 }
 
 export async function purgeFeatureData(channel, scopes) {
-  channel.store.revokeDerivedPersonas?.(scopes);
   const keys = revokedMessageKeys(channel, scopes);
   purgeStateBackups(channel, scopes, keys);
   purgeTasks(channel, scopes, keys);

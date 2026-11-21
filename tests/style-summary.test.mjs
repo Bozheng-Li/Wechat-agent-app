@@ -3,72 +3,52 @@ import assert from 'node:assert/strict';
 import { styleProfile } from '../modules/agent/style-profile.mjs';
 import { profileSheet, styleSamples, styleSummaryMessages, summarizeStyle, STYLE_SUMMARY_PROMPT } from '../modules/agent/style-summary.mjs';
 
-const profile = styleProfile([
-  { direction: 'incoming', text: '稀了点', time: 1000 },
-  { direction: 'incoming', text: '敲这么久', time: 2000 },
-  { direction: 'incoming', text: '行', time: 3000 },
-  { direction: 'incoming', text: '稀了点', time: 124_000 },
-  ...Array.from({ length: 24 }, (_, index) => ({ direction: 'incoming', text: '第' + index + '条', time: 200_000 + index * 1000 })),
-]);
+const rows = [{ direction: 'incoming', text: '稀了点', time: 1000 }, { direction: 'incoming', text: '有一说一，这句话可以直接点', time: 2000 }];
+const profile = styleProfile(rows);
+const client = (content, finishReason = 'stop') => ({ complete: async () => ({ message: { content }, finishReason, usage: { total_tokens: 12 } }) });
 
-test('the measurement sheet carries numbers and distinguishes low frequency from a prohibition', () => {
+test('statistics remain reference data, not a persona or a ban on low frequency words', () => {
   const sheet = profileSheet(profile);
-  for (const key of ['样本', '长度', '占比', '标点', '连发', '语气', '常用语气词', '不是禁用']) assert(sheet.includes(key), key);
-  assert.match(sheet, /中位 \d+ 字/);
+  assert.match(sheet, /中位 \d+ 字/); assert.match(sheet, /不代表禁止/);
+  assert.match(STYLE_SUMMARY_PROMPT, /不是回复字数上限/);
 });
 
-test('explicit assistant tasks are dropped but a human mention and a greeting remain as anonymized evidence', () => {
-  const samples = styleSamples([
-    { text: '小胖，评价一下这个方案', time: 4 }, { text: '@某甲 你看着办', time: 3 },
-    { text: '稀了点', time: 2 }, { text: '行', time: 1 }, { text: '小胖，早上好', time: 5 },
-  ], { exclude: ['小胖', '胖'] });
-  assert.deepEqual(samples.map(row => row.text), ['[称呼],早上好', '[称呼] 你看着办', '稀了点', '行']);
+test('real phrases, long lines, digits and English survive sampling while direct assistant tasks are separated', () => {
+  const samples = styleSamples([{ text: '助手，帮我总结一下' }, { text: '助手，早上好' }, { text: '@某甲 你看着办' },
+    { text: '长'.repeat(81) }, { text: '我今天说了3次这个词' }, { text: 'okay then' }], { exclude: ['助手'] });
+  assert.equal(samples.length, 5);
+  assert(samples.some(row => row.text === '[称呼]，早上好'));
+  assert(samples.some(row => row.text === '[称呼] 你看着办'));
+  assert(samples.some(row => row.text === '长'.repeat(81)));
+  assert(samples.some(row => row.text === '我今天说了3次这个词'));
+  assert(samples.some(row => row.text === 'okay then'));
 });
 
-test('source evidence preserves recurrence, is latest-first and bounded, and removes links and oversized lines', () => {
-  const samples = styleSamples([
-    { text: '稀了点', time: 1 }, { text: '稀了点', time: 2 }, { text: 'https://example.com/x', time: 3 },
-    { text: '[图片]', time: 4 }, { text: '长'.repeat(81), time: 5 }, { text: '行', time: 6 }, { text: '  敲这么久  ', time: 7 },
-  ]);
-  assert.deepEqual(samples.map(row => row.text), ['敲这么久', '行', '稀了点', '稀了点']);
-  const latest = styleSamples(Array.from({ length: 400 }, (_, i) => ({ text: '反正就是这样吧', time: i + 1 })));
-  assert.equal(latest.length, 220);
-  assert.equal(latest[0].time, 400);
-  assert.equal(latest.at(-1).time, 181);
+test('newest samples are bounded without deleting repeated speech or scene context', () => {
+  const samples = styleSamples(Array.from({ length: 400 }, (_, i) => ({ text: '反正就是这样吧', time: i+1,
+    chatType: 'group', conversation: '会话1', context: [{ speaker: '其他成员', text: '怎么说？' }] })));
+  assert.equal(samples.length, 220); assert.equal(samples[0].time, 400); assert.equal(samples.at(-1).time, 181);
+  assert.equal(samples[0].context[0].text, '怎么说？');
 });
 
-test('the prompt uses anonymized real language, structured evidence and unknown context instead of unsupported biography', () => {
-  const messages = styleSummaryMessages({ target: '合成人物甲', profile, samples: ['稀了点', '行'] });
-  assert.equal(messages[0].role, 'system');
+test('model receives actual language and warmth preference, and is asked for Markdown rather than evidence JSON', () => {
+  const messages = styleSummaryMessages({ profile, samples: styleSamples(rows), warmth: 'warm' });
   assert.equal(messages[0].content, STYLE_SUMMARY_PROMPT);
-  for (const aspect of ['长度和节奏', '语气与用词', '口头禅与高频词', '场合证据', 'JSON', 'evidence']) assert(STYLE_SUMMARY_PROMPT.includes(aspect), aspect);
-  assert.match(STYLE_SUMMARY_PROMPT, /不要编造/);
-  assert.match(STYLE_SUMMARY_PROMPT, /一律未知/);
-  const user = messages[1].content;
-  assert(!user.includes('合成人物甲'), 'the real target name does not reach the model');
-  assert(user.includes('稀了点') && user.includes('行'), 'safe real language still reaches the model');
-  assert(user.includes('chatType') && user.includes('unknown'));
+  for (const text of ['口头禅', '语气词', '性格', '场合']) assert(STYLE_SUMMARY_PROMPT.includes(text));
+  assert.match(messages[1].content, /增加温度/); assert.match(messages[1].content, /稀了点/);
+  assert(!STYLE_SUMMARY_PROMPT.includes('只返回JSON'));
 });
 
-const client = result => ({ complete: async () => result, providers: undefined });
-const valid = JSON.stringify({ sections: [{ heading: '长度和节奏', observations: [{ text: '一条一般四到十字。', evidence: [0] }] }], phrases: ['稀了点'] });
-
-test('one complete structured summary becomes a verified persona draft', async () => {
-  let calls = 0;
-  const summary = await summarizeStyle({ ctx: {}, selection: {}, target: '甲', profile, samples: ['稀了点'],
-    client: { complete: async () => { calls++; return { message: { content: valid }, finishReason: 'stop', usage: { total_tokens: 900 } }; } } });
-  assert.match(summary.text, /一条一般四到十字/);
-  assert.match(summary.text, /稀了点/);
-  assert.equal(summary.usage.total_tokens, 900);
-  assert.equal(calls, 1);
+test('plain Markdown and long quoted examples are preserved without subjective content approval', async () => {
+  const body = '# 人物语言档案\n## 性格特点\n说话直接，熟人之间爱调侃。\n## 口头禅\n“今天这个事情真是有点离谱了吧”。';
+  const result = await summarizeStyle({ ctx: {}, selection: {}, profile, samples: styleSamples(rows), client: client(body) });
+  assert.equal(result.text, body); assert.equal(result.usage.total_tokens, 12);
 });
 
-test('truncated, empty and malformed summaries fail rather than becoming a persona', async () => {
-  await assert.rejects(() => summarizeStyle({ ctx: {}, selection: {}, profile, samples: ['稀了点'],
-    client: client({ message: { content: '写到一半' }, finishReason: 'length' }) }), { code: 'PERSONA_SUMMARY_INCOMPLETE' });
-  await assert.rejects(() => summarizeStyle({ ctx: {}, selection: {}, profile, samples: ['稀了点'],
-    client: client({ message: { content: '   ' }, finishReason: 'stop' }) }), { code: 'PERSONA_SUMMARY_EMPTY' });
-  await assert.rejects(() => summarizeStyle({ ctx: {}, selection: {}, profile, samples: ['稀了点'],
-    client: client({ message: { content: 'not json' }, finishReason: 'stop' }) }), { code: 'PERSONA_SUMMARY_SCHEMA' });
-  await assert.rejects(() => summarizeStyle({ ctx: {}, selection: {}, profile, samples: [] }), { code: 'PERSONA_SAMPLE_SMALL' });
+test('a partial model result remains editable with a warning; only no data/no output fails honestly', async () => {
+  const result = await summarizeStyle({ ctx: {}, selection: {}, profile, samples: styleSamples(rows), client: client('写到这里的真实正文', 'length') });
+  assert.equal(result.text, '写到这里的真实正文'); assert(result.warning);
+  await assert.rejects(summarizeStyle({ ctx: {}, selection: {}, profile, samples: styleSamples(rows), client: client('   ') }), { code: 'PERSONA_SUMMARY_EMPTY' });
+  await assert.rejects(summarizeStyle({ ctx: {}, selection: {}, profile, samples: [] }), { code: 'PERSONA_SAMPLE_EMPTY' });
+  await assert.rejects(summarizeStyle({ ctx: {}, selection: {}, profile, samples: styleSamples(rows), client: { complete: async () => { throw Error('real network error'); } } }), /real network error/);
 });

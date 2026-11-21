@@ -80,6 +80,7 @@ export function rpcHandler(service, isDisposed = () => false) {
           'memory.global.get',
           'memory.role.get',
           'memory.role.list',
+          'memory.role.labels',
           'memory.role.save',
           'memory.role.refresh',
           'memory.role.settings',
