@@ -200,6 +200,8 @@ function recoveryPlan(original, kinds) {
 }
 
 export function recoveryAllowed(workbench, original, mode, acknowledgedMissing = false) {
+  if (original.unavailableNotice && mode === 'regenerate')
+    fail('RECOVERY_NOT_ALLOWED', '本条没有可读的用户正文，只能补发原读取提示，不能重新生成回答。');
   if (original.toolProgress) fail('RECOVERY_NOT_ALLOWED', '开始提示只适用于当时的操作，不补发过期提示。');
   if (!['failed', 'unknown', 'partial', 'cancelled'].includes(original.state))
     fail('RECOVERY_ALREADY_SENT', '这条回复不需要恢复，已确认的消息不会重发');

@@ -6,7 +6,7 @@ import { NATURAL_REASONS } from "./natural-chat.mjs";
 import { matches } from "./helpers.mjs";
 import { remoteCommand } from '../remote/commands/index.mjs';
 import { naturalRemoteRequest } from '../remote/intent/index.mjs';
-import { unavailableMessage } from '../../shared/message-content.mjs';
+import { unavailableMessage, UNAVAILABLE_MESSAGE_REASON, UNAVAILABLE_MESSAGE_REPLY } from '../../shared/message-content.mjs';
 import { conversationAuthorized, conversationEligible } from '../../shared/authorization.mjs';
 
 const participationTaskText = allowColdOpening =>
@@ -104,8 +104,25 @@ export function receiveMessage(channel, message, accountId) {
         observation.natural = channel.natural.onHuman(record, config, { trigger: false });
         retractQueuedColdOpenings(channel, record, observation.natural);
       }
-      channel.store.remember(key, channel.now(), { ...record, state: 'skipped', contentUnavailable: true,
-        reason: '已记录无法解析的消息占位，等待可读的文字要求' }, observation);
+      record.contentUnavailable = true;
+      record.reason = UNAVAILABLE_MESSAGE_REASON;
+      // A missing body cannot establish a nickname/command trigger. Keep the
+      // existing group boundary and only notify private senders or a native @.
+      const notify = message.chatType === 'private' || message.message.some(segment => segment.type === 'at' && segment.data?.qq === account.id);
+      if (!notify || channel.queue.length >= 100) {
+        channel.store.remember(key, channel.now(), { ...record, state: 'skipped' }, observation);
+        return;
+      }
+      if (participating) {
+        channel.cancelNaturalAmbient(record, '群成员已直接呼叫，先告知本条消息读不到', { followups: true });
+        observation.natural.pendingKey = null;
+        observation.progress = { count: 0, target: channel.nextThreshold(config) };
+      }
+      record.unavailableNotice = true;
+      record.question = '[微信未提供可读的消息正文]';
+      channel.store.remember(key, channel.now(), record, observation);
+      channel.pushDirect({ record, message, mode: 'default', config, text: '', unavailableNotice: UNAVAILABLE_MESSAGE_REPLY });
+      channel.drain();
       return;
     }
     if (message.message?.some(segment => segment.type === 'file') &&

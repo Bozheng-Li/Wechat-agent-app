@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { traceSnippet, tracePayload } from './sanitize.mjs';
 import { TRACE_ACTIVE, traceState } from '../../shared/execution-traces.mjs';
 import { ChannelError } from '../../shared/contracts.mjs';
+import { UNAVAILABLE_MESSAGE_TITLE } from '../../shared/message-content.mjs';
 
 export function recordType(record) {
   if (record.recoveryOf) return 'maintenance';
@@ -12,6 +13,7 @@ export function recordType(record) {
   return 'conversation';
 }
 export function recordState(record) {
+  if (record.contentUnavailable && record.state === 'skipped') return 'failed';
   if (record.state === 'queued') return 'queued';
   if (['generating', 'sending', 'running'].includes(record.state)) return 'running';
   if (['ignored', 'skipped'].includes(record.state)) return 'skipped';
@@ -22,11 +24,12 @@ export const recordInput = record => ({ question: record.question, accountId: re
   taskId: record.taskId, recoveryOf: record.recoveryOf });
 export const recordOutput = record => ({ state: record.state, reply: record.reply, replyDraft: record.replyDraft, replyMedia: record.replyMedia,
   personaMode: record.personaMode, personaPasses: record.personaPasses,
+  ...(record.contentUnavailable ? { contentUnavailable: true, unavailableNotice: record.unavailableNotice === true } : {}),
   reason: record.reason, sentAt: record.sentAt, delivery: record.delivery, acknowledgedMessageIds: record.acknowledgedMessageIds,
   deliveryParts: record.deliveryParts, sessionId: record.sessionId, memoryReflection: record.memoryReflection, taskFallback: record.taskFallback });
 export const recordSpec = record => ({ key: 'record:' + record.key, type: recordType(record), accountId: record.accountId,
   peerId: record.peerId, chatType: record.chatType, actor: record.sender || record.senderId, source: record.mode === 'scheduled' ? 'schedule' : 'chat',
-  title: traceSnippet(record.question || (record.mode === 'scheduled' ? '定时执行' : '会话回复'), 100), createdAt: record.createdAt,
+  title: traceSnippet(record.contentUnavailable ? UNAVAILABLE_MESSAGE_TITLE : record.question || (record.mode === 'scheduled' ? '定时执行' : '会话回复'), 100), createdAt: record.createdAt,
   input: recordInput(record), state: recordState(record),
   ...(recordState(record) === 'skipped' && record.reason ? { reason: record.reason } : {}) });
 export function historicalTraces(channel) {

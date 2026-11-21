@@ -55,7 +55,7 @@ export async function processReply(channel, item) {
     const imageReferences = [];
     const imageNoteChecks = [];
     let replySelectionApplied = false;
-    const persona = item.remoteCommand ? null
+    const persona = item.unavailableNotice || item.remoteCommand ? null
       : channel.store.conversationPersona(record.accountId, record.chatType, record.peerId);
     const scope = {
       accountId: record.accountId,
@@ -71,14 +71,18 @@ export async function processReply(channel, item) {
         .map((segment) => ({ id: segment.data.qq, name: segment.data.name || '' })),
     };
     const reminder =
-      !item.remoteCommand && !item.ambient &&
+      !item.unavailableNotice && !item.remoteCommand && !item.ambient &&
       !item.naturalDecision &&
       !item.scheduled &&
       item.config.allowChatTasks !== false &&
       channel.scheduler
         ? simpleReminder(item.text, [persona.name, ...persona.aliases], record.createdAt)
         : null;
-    if (item.remoteCommand) {
+    if (item.unavailableNotice) {
+      // A transport compatibility notice is deterministic: no model, memory
+      // lookup, tools or persona rewriting are needed to admit missing content.
+      result = { text: item.unavailableNotice, template: true };
+    } else if (item.remoteCommand) {
       try {
         channel.remote.assertAllowed(record, controller.signal);
         item.remoteQueryAuthorized = true;
